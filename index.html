@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+  <title>Player's Book</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>*{box-sizing:border-box;margin:0;padding:0;}body{background:#f5f5f2;}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+// ── Constants ──────────────────────────────────────────────────────────────
+const SUITS = [“♠”,“♥”,“♦”,“♣”];
+const SUIT_COLOR = s => (s===“♥”||s===“♦”) ? “#e05a5a” : “#1a1a1a”;
+const STREETS = [“Preflop”,“Flop”,“Turn”,“River”];
+const STREET_COLOR = { Preflop:”#4070e0”, Flop:”#22a060”, Turn:”#d08010”, River:”#d03030” };
+const ACTIONS = [“Fold”,“Check”,“Call”,“Bet”,“Raise”,“3Bet”,“4Bet+”,“Limp”,“AllIn”];
+const ACTION_COLOR = {
+Fold:”#888”, Check:”#20a080”, Call:”#3070c0”, Bet:”#b08820”,
+Raise:”#c06010”, “3Bet”:”#b02040”, “4Bet+”:”#8010a0”, Limp:”#408840”, AllIn:”#d02020”,
+};
+const SIZES = [“min”,“2x”,“2.5x”,“3x”,“4x”,“5x+”,“¼pot”,“⅓pot”,“½pot”,“⅔pot”,“¾pot”,“pot”];
+const TENDENCIES = [“アグレッシブ”,“パッシブ”,“タイト”,“ルーズ”,“ブラフ多め”,“コールステーション”,“ナット狙い”,“読みにくい”,“ポジ意識高い”,“OOP苦手”];
+const SKILL_LEVELS = [“初心者”,“中級者”,“上級者”,“プロ級”];
+const TABLE_SIZES = [“HU”,“3max”,“4max”,“5max”,“6max”,“7max”,“8max”,“9max”,“10max”];
+const RANKS = [“A”,“K”,“Q”,“J”,“T”,“9”,“8”,“7”,“6”,“5”,“4”,“3”,“2”];
+const CARD_SUITS = [“s”,“h”,“d”,“c”];
+const CARD_SUIT_SYMBOL = { s:“♠”, h:“♥”, d:“♦”, c:“♣” };
+const CARD_SUIT_COLOR  = { s:”#1a1a1a”, h:”#e05a5a”, d:”#e05a5a”, c:”#1a1a1a” };
+const CARD_RANKS = [“A”,“K”,“Q”,“J”,“T”,“9”,“8”,“7”,“6”,“5”,“4”,“3”,“2”];
+
+const VILLAIN_COLORS = [”#c03060”,”#c06010”,”#7020c0”,”#10a080”];
+const VILLAIN_BGS    = [“rgba(192,48,96,0.1)”,“rgba(192,96,16,0.1)”,“rgba(112,32,192,0.1)”,“rgba(16,160,128,0.1)”];
+const VILLAIN_BORDERS= [“rgba(192,48,96,0.3)”,“rgba(192,96,16,0.3)”,“rgba(112,32,192,0.3)”,“rgba(16,160,128,0.3)”];
+const HERO_COLOR = “#2060b0”;
+const HERO_BG    = “rgba(32,96,176,0.08)”;
+const HERO_BORDER= “rgba(32,96,176,0.25)”;
+
+const SEAT_ANGLES = {
+“HU”:    {“BTN/SB”:270,“BB”:90},
+“3max”:  {“BTN”:270,“SB”:30,“BB”:150},
+“4max”:  {“CO”:270,“BTN”:0,“SB”:90,“BB”:180},
+“5max”:  {“UTG”:252,“CO”:324,“BTN”:36,“SB”:108,“BB”:180},
+“6max”:  {“UTG”:240,“HJ”:300,“CO”:0,“BTN”:60,“SB”:120,“BB”:180},
+“7max”:  {“UTG”:231,“MP”:282,“HJ”:333,“CO”:26,“BTN”:77,“SB”:128,“BB”:180},
+“8max”:  {“UTG”:225,“UTG+1”:270,“MP”:315,“HJ”:0,“CO”:45,“BTN”:90,“SB”:135,“BB”:180},
+“9max”:  {“UTG”:220,“UTG+1”:260,“MP”:300,“HJ”:340,“CO”:20,“BTN”:60,“SB”:100,“BB”:140,“BB2”:180},
+“10max”: {“UTG”:216,“UTG+1”:252,“UTG+2”:288,“MP”:324,“HJ”:0,“CO”:36,“BTN”:72,“SB”:108,“BB”:144,“BB2”:180},
+};
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const uid  = () => Math.random().toString(36).slice(2,9);
+const now  = () => new Date().toLocaleDateString(“ja-JP”,{month:“numeric”,day:“numeric”,hour:“2-digit”,minute:“2-digit”});
+const cellLabel = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return r+r; if(i<j)return r+c+“s”; return c+r+“o”; };
+const cellType  = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return”pair”; if(i<j)return”suited”; return”offsuit”; };
+const usedBoardCards = b => { if(!b)return[]; return […(b.flop||[]),…[b.turn,b.river]].filter(Boolean); };
+const comboCount = key => key.length===2 ? 6 : key.endsWith(“s”) ? 4 : 12;
+const totalCombos = range => (range||[]).reduce((s,k)=>s+comboCount(k),0);
+
+// Calculate pot size in BB at the start of each street
+const calcPots = (hand) => {
+const ante = hand.ante || false;
+let pot = ante ? 2.5 : 1.5;
+
+// Preflop blind already-posted amounts per position
+const BLIND_POSTED = { “BB”:1, “SB”:0.5, “BTN/SB”:0.5 };
+const getBlind = pos => BLIND_POSTED[(pos||””).toUpperCase()] || 0;
+const getActorPos = actor => {
+if (actor===“hero”) return hand.heroPos||””;
+const v=(hand.villains||[]).find(v=>v.id===actor);
+return v?v.pos||””:””;
+};
+
+// size-label → total bet amount in BB
+// For open bets: “2x” = 2×BB = 2BB
+// For raises: “2x” = 2×currentBet, “3x” = 3×currentBet, etc.
+// pot-relative: fraction of current pot
+const sizeLabel2BB = (size, currentPot, currentBet, isRaise) => {
+if(!size) return 0;
+const base = isRaise ? currentBet : 1; // raises are multiples of current bet, bets are multiples of 1BB
+if(size===“min”)    return currentBet * 2;   // min-raise = 2× current bet
+if(size===“2x”)     return base * 2;
+if(size===“2.5x”)   return base * 2.5;
+if(size===“3x”)     return base * 3;
+if(size===“4x”)     return base * 4;
+if(size===“5x+”)    return base * 5;
+if(size===“¼pot”)   return currentPot * 0.25;
+if(size===“⅓pot”)   return currentPot * (1/3);
+if(size===“½pot”)   return currentPot * 0.5;
+if(size===“⅔pot”)   return currentPot * (2/3);
+if(size===“¾pot”)   return currentPot * 0.75;
+if(size===“pot”)    return currentPot;
+return 0;
+};
+
+const addStreetActions = (street) => {
+const committed = {};
+// Preflop: pre-credit already-posted blind amounts
+if(street===“Preflop”){
+(hand.streets[street]||[]).forEach(a=>{
+if(!(a.actor in committed))
+committed[a.actor] = getBlind(getActorPos(a.actor));
+});
+}
+let currentBet = street===“Preflop” ? 1 : 0;
+
+```
+(hand.streets[street]||[]).forEach(a=>{
+  if(!a.action) return;
+  if(!(a.actor in committed)) committed[a.actor] = 0; // ← 未登録のみ初期化（上書きしない）
+
+  if(["Bet","Raise","3Bet","4Bet+","AllIn"].includes(a.action)){
+    const isRaise = ["Raise","3Bet","4Bet+"].includes(a.action) && currentBet > 0;
+    const totalBet = a.betAmt && parseFloat(a.betAmt)>0
+      ? parseFloat(a.betAmt)
+      : sizeLabel2BB(a.size, pot, currentBet, isRaise);
+    if(totalBet>0){
+      const netAdd = totalBet - committed[a.actor];
+      pot += Math.max(0, netAdd);
+      committed[a.actor] = totalBet;
+      currentBet = totalBet;
+    }
+  } else if(a.action==="Call"){
+    const netAdd = currentBet - committed[a.actor];
+    pot += Math.max(0, netAdd);
+    committed[a.actor] = currentBet;
+  } else if(a.action==="Limp"){
+    const netAdd = 1 - committed[a.actor];
+    pot += Math.max(0, netAdd);
+    committed[a.actor] = 1;
+    if(currentBet<1) currentBet=1;
+  }
+});
+```
+
+};
+
+const r1 = v => Math.round(v*10)/10;
+const pots = { Preflop: r1(pot) };
+addStreetActions(“Preflop”);
+pots.Flop = r1(pot);
+addStreetActions(“Flop”);
+pots.Turn = r1(pot);
+addStreetActions(“Turn”);
+pots.River = r1(pot);
+return pots;
+};
+const heroHandToCards = key => {
+if (!key) return [null, null];
+if (key.length === 2) return [key[0]+“s”, key[1]+“h”];
+const r1=key[0], r2=key[1], type=key[2];
+return type===“s” ? [r1+“s”, r2+“s”] : [r1+“s”, r2+“h”];
+};
+
+const newVillain = () => ({ id:uid(), pos:””, range:[], bb:”” });
+const newAction  = (actor=“v0”) => ({ id:uid(), actor, action:null, size:null, betAmt:””, comment:”” });
+const newHand    = () => ({
+id:uid(), date:now(),
+streets:{ Preflop:[], Flop:[], Turn:[], River:[] },
+note:””, heroHand:null, heroPos:””, heroBB:””,
+ante: true,
+villains:[ newVillain() ],
+board:{ flop:[null,null,null], turn:null, river:null },
+avgBB:””, playersLeft:””, playersTot:””,
+});
+const newPlayer = () => ({
+id:uid(), name:””, seat:””, suit:SUITS[0], skill:“中級者”,
+tendencies:[], vpip:””, pfr:””, notes:””, hands:[], tableSize:“6max”,
+});
+
+const load    = () => { try { const d=localStorage.getItem(“pkr6”); return d?JSON.parse(d):[]; } catch { return []; } };
+const persist = d => { try { localStorage.setItem(“pkr6”,JSON.stringify(d)); } catch {} };
+
+const actorLabel = (actor, villains) => {
+if (actor===“hero”) return “自分”;
+const idx = (villains||[]).findIndex(v=>v.id===actor);
+const n = idx >= 0 ? idx : parseInt((actor||“v0”).slice(1))||0;
+return villains && villains.length > 1 ? `相手${n+1}` : “相手”;
+};
+const actorColor = (actor, idx) => actor===“hero” ? HERO_COLOR : VILLAIN_COLORS[idx%VILLAIN_COLORS.length];
+const actorBg    = (actor, idx) => actor===“hero” ? HERO_BG    : VILLAIN_BGS[idx%VILLAIN_BGS.length];
+
+const FONT = “‘Meiryo’,‘メイリオ’,‘Hiragino Kaku Gothic ProN’,‘Hiragino Sans’,sans-serif”;
+
+// ── Styles ─────────────────────────────────────────────────────────────────
+const inp = { width:“100%”,background:”#fff”,border:“1px solid #ccc”,borderRadius:8,padding:“9px 12px”,color:”#1a1a1a”,fontSize:13,outline:“none”,fontFamily:FONT,boxSizing:“border-box” };
+const ghostBtn = { background:”#f0f0ee”,border:“1px solid #ccc”,borderRadius:8,padding:“7px 14px”,color:”#444”,fontSize:12,cursor:“pointer”,fontFamily:FONT };
+function FLabel({ label, children, style }) {
+return (
+<div style={{ marginBottom:14,…style }}>
+<div style={{ fontSize:10,color:”#888”,letterSpacing:“0.12em”,textTransform:“uppercase”,marginBottom:7,fontFamily:FONT }}>{label}</div>
+{children}
+</div>
+);
+}
+
+// ── Hand Range Grid ────────────────────────────────────────────────────────
+function HandRangeGrid({ selected, onChange, mode=“multi”, accentColor=”#b08820” }) {
+const [isDragging,setDragging]=useState(false);
+const [dragMode,  setDragMode]=useState(null);
+const [cellSize,  setCellSize]=useState(26);
+const containerRef=useRef(null);
+const selRef=useRef(selected);
+useEffect(()=>{ selRef.current=selected; },[selected]);
+
+useEffect(()=>{
+const measure=()=>{
+if(!containerRef.current)return;
+const w=containerRef.current.offsetWidth;
+// 16px label col + 13 cells with 1px gap each
+const sz=Math.floor((w-20)/13);
+setCellSize(Math.max(18,Math.min(sz,32)));
+};
+measure();
+const ro=new ResizeObserver(measure);
+if(containerRef.current)ro.observe(containerRef.current);
+return()=>ro.disconnect();
+},[]);
+
+const isSelected=key=>mode===“single”?selected===key:(selected||[]).includes(key);
+const applyToKey=(key,fm)=>{
+if(mode===“single”){onChange(selected===key?null:key);return;}
+const arr=selRef.current||[], dm=fm??dragMode;
+if(dm===“add”&&!arr.includes(key)){const n=[…arr,key];selRef.current=n;onChange(n);}
+if(dm===“remove”&&arr.includes(key)){const n=arr.filter(k=>k!==key);selRef.current=n;onChange(n);}
+};
+const startDrag=(key,e)=>{
+e.preventDefault();
+if(mode===“single”){onChange(selected===key?null:key);return;}
+const arr=selRef.current||[], dm=arr.includes(key)?“remove”:“add”;
+setDragging(true);setDragMode(dm);
+const n=dm===“add”?[…arr,key]:arr.filter(k=>k!==key);
+selRef.current=n;onChange(n);
+};
+const endDrag=()=>setDragging(false);
+const getKeyFromTouch=t=>document.elementFromPoint(t.clientX,t.clientY)?.dataset?.rangekey||null;
+const handleTouchMove=e=>{e.preventDefault();if(!isDragging||mode===“single”)return;const k=getKeyFromTouch(e.touches[0]);if(k)applyToKey(k);};
+
+const cellBg=(r,c,sel)=>{
+const t=cellType(r,c);
+if(sel){if(t===“pair”)return accentColor;if(t===“suited”)return mode===“single”?”#3070c0”:”#208050”;return mode===“single”?”#3070c0”:”#a05020”;}
+if(t===“pair”)return”#f5ead0”;if(t===“suited”)return”#e8f5ee”;return”#faf0e8”;
+};
+const cellBorder=(r,c,sel)=>{
+if(sel)return”transparent”;const t=cellType(r,c);
+if(t===“pair”)return”#d4c090”;if(t===“suited”)return”#90d0a0”;return”#d0a878”;
+};
+const count=mode===“single”?(selected?1:0):totalCombos(selected);
+
+return(
+<div style={{ userSelect:“none”,touchAction:“none” }}>
+<div style={{ display:“flex”,gap:10,marginBottom:8,flexWrap:“wrap”,alignItems:“center” }}>
+{[[“ペア”,”#f5ead0”,”#b08820”],[“スーテッド”,”#e8f5ee”,”#208050”],[“オフスート”,”#faf0e8”,”#a05020”]].map(([l,bg,c])=>(
+<div key={l} style={{ display:“flex”,gap:4,alignItems:“center” }}><div style={{ width:10,height:10,borderRadius:2,background:bg,border:`1px solid ${c}44` }}/><span style={{ fontSize:10,color:c,fontFamily:FONT }}>{l}</span></div>
+))}
+<span style={{ marginLeft:“auto”,fontSize:11,color:accentColor,fontFamily:FONT }}>{mode===“single”?(selected||“未選択”):`${count}コンボ選択中`}</span>
+{mode===“multi”&&count>0&&<button onClick={()=>onChange([])} style={{ background:“none”,border:“1px solid #f0a0a0”,borderRadius:4,padding:“2px 8px”,color:”#c04040”,fontSize:10,cursor:“pointer”,fontFamily:FONT }}>クリア</button>}
+{mode===“single”&&selected&&<button onClick={()=>onChange(null)} style={{ background:“none”,border:“1px solid #f0a0a0”,borderRadius:4,padding:“2px 8px”,color:”#c04040”,fontSize:10,cursor:“pointer”,fontFamily:FONT }}>クリア</button>}
+</div>
+<div ref={containerRef} style={{ width:“100%” }}>
+<div onMouseUp={endDrag} onMouseLeave={endDrag} onTouchMove={handleTouchMove} onTouchEnd={endDrag}>
+<div style={{ display:“flex”,marginLeft:18 }}>
+{RANKS.map(r=><div key={r} style={{ width:cellSize,textAlign:“center”,fontSize:Math.max(7,cellSize*0.32),color:”#aaa”,marginBottom:2,flexShrink:0,fontFamily:FONT }}>{r}</div>)}
+</div>
+{RANKS.map(row=>(
+<div key={row} style={{ display:“flex”,alignItems:“center”,marginBottom:1 }}>
+<div style={{ width:16,textAlign:“center”,fontSize:Math.max(7,cellSize*0.32),color:”#aaa”,marginRight:2,flexShrink:0,fontFamily:FONT }}>{row}</div>
+{RANKS.map(col=>{
+const key=cellLabel(row,col),sel=isSelected(key);
+const fs=Math.max(6,cellSize*0.28);
+return(
+<div key={col} data-rangekey={key}
+onMouseDown={e=>startDrag(key,e)}
+onMouseEnter={()=>{if(isDragging&&mode!==“single”)applyToKey(key);}}
+onTouchStart={e=>startDrag(key,e)} title={key}
+style={{ width:cellSize,height:Math.round(cellSize*0.82),flexShrink:0,borderRadius:2,marginRight:1,background:cellBg(row,col,sel),border:`1px solid ${cellBorder(row,col,sel)}`,display:“flex”,alignItems:“center”,justifyContent:“center”,cursor:“pointer”,transition:“background .08s”,fontSize:fs,fontWeight:sel?“bold”:“normal”,color:sel?”#fff”:”#555”,fontFamily:“monospace”,touchAction:“none” }}
+>{key}</div>
+);
+})}
+</div>
+))}
+</div>
+</div>
+{mode===“multi”&&(
+<div style={{ display:“flex”,gap:5,marginTop:8,flexWrap:“wrap” }}>
+{[{label:“プレミアム”,keys:[“AA”,“KK”,“QQ”,“JJ”,“AKs”,“AKo”]},{label:“強いハンド”,keys:[“TT”,“99”,“AQs”,“AQo”,“AJs”,“KQs”]},{label:“ブロードウェイ”,keys:[“ATo”,“AJo”,“KQo”,“KJs”,“KJo”,“QJs”]},{label:“全スーテッドA”,keys:RANKS.slice(1).map(r=>“A”+r+“s”)}].map(({label,keys})=>(
+<button key={label} onClick={()=>{const cur=selected||[];const allIn=keys.every(k=>cur.includes(k));onChange(allIn?cur.filter(k=>!keys.includes(k)):[…new Set([…cur,…keys])]);}} style={{ …ghostBtn,fontSize:10,padding:“3px 9px” }}>{label}</button>
+))}
+</div>
+)}
+</div>
+);
+}
+
+// ── Poker Table ────────────────────────────────────────────────────────────
+function PokerTable({ tableSize, selected, onChange, heroPos, heroBB, onChangeHeroBB, villains, onChangeHeroPos, onChangeVillainPos, onChangeVillainBB, mode=“single” }) {
+const size=tableSize||“6max”;
+const angles=SEAT_ANGLES[size]||SEAT_ANGLES[“6max”];
+const seats=Object.keys(angles);
+const R=118,CX=130,CY=130;
+
+const handleClick=seat=>{
+if(mode===“single”){onChange(selected===seat?””:seat);return;}
+if(heroPos===seat){onChangeHeroPos(””);return;}
+const vi=(villains||[]).findIndex(v=>v.pos===seat);
+if(vi>=0){onChangeVillainPos(villains[vi].id,””);return;}
+const unassignedV=(villains||[]).find(v=>!v.pos);
+if(unassignedV){onChangeVillainPos(unassignedV.id,seat);return;}
+if(!heroPos){onChangeHeroPos(seat);return;}
+if(villains&&villains.length>0)onChangeVillainPos(villains[0].id,seat);
+};
+
+const bbInput = (val, onChg, col) => (
+<span style={{ display:“inline-flex”,alignItems:“center”,gap:2 }} onClick={e=>e.stopPropagation()}>
+<input
+value={val||””}
+onChange={e=>onChg(e.target.value)}
+type=“number”
+placeholder=”—”
+style={{ width:38,fontSize:10,padding:“1px 4px”,border:`1px solid ${col}55`,borderRadius:4,fontFamily:FONT,color:col,background:”#fff”,outline:“none”,textAlign:“center” }}
+/>
+<span style={{ fontSize:9,color:”#aaa”,fontFamily:FONT }}>BB</span>
+</span>
+);
+
+return(
+<div style={{ marginBottom:14 }}>
+{mode===“single”?(
+<div style={{ fontSize:10,color:”#888”,letterSpacing:“0.12em”,textTransform:“uppercase”,marginBottom:8,fontFamily:FONT }}>
+ポジション {selected&&<span style={{ color:”#b08820”,marginLeft:6 }}>— {selected}</span>}
+</div>
+):(
+<div style={{ display:“flex”,gap:8,alignItems:“center”,marginBottom:8,flexWrap:“wrap” }}>
+<span style={{ fontSize:10,color:”#888”,letterSpacing:“0.12em”,textTransform:“uppercase”,fontFamily:FONT }}>ポジション</span>
+{(villains||[]).map((v,i)=>(
+<span key={v.id} style={{ display:“inline-flex”,alignItems:“center”,gap:3,fontSize:10,fontFamily:FONT }}>
+<span style={{ color:VILLAIN_COLORS[i%VILLAIN_COLORS.length] }}>●</span>
+<span style={{ color:”#666” }}>{(villains||[]).length>1?`相手${i+1}`:“相手”}</span>
+{v.pos&&<span style={{ color:VILLAIN_COLORS[i%VILLAIN_COLORS.length],fontWeight:“bold” }}>{v.pos}</span>}
+{bbInput(v.bb, val=>onChangeVillainBB&&onChangeVillainBB(v.id,val), VILLAIN_COLORS[i%VILLAIN_COLORS.length])}
+</span>
+))}
+<span style={{ display:“inline-flex”,alignItems:“center”,gap:3,fontSize:10,fontFamily:FONT }}>
+<span style={{ color:HERO_COLOR }}>●</span>
+<span style={{ color:”#666” }}>自分</span>
+{heroPos&&<span style={{ color:HERO_COLOR,fontWeight:“bold” }}>{heroPos}</span>}
+{bbInput(heroBB, val=>onChangeHeroBB&&onChangeHeroBB(val), HERO_COLOR)}
+</span>
+</div>
+)}
+{/* Stadium-shaped table: 300×160, seated positions along the rim */}
+<div style={{ position:“relative”,width:300,height:200,margin:“0 auto” }}>
+<svg width=“300” height=“200” style={{ position:“absolute”,inset:0 }}>
+{/* Shadow */}
+<rect x="14" y="44" width="272" height="122" rx="61" ry="61" fill="rgba(0,0,0,0.18)" />
+{/* Outer black rail */}
+<rect x="10" y="40" width="280" height="120" rx="60" ry="60" fill="#1a1a1a"/>
+{/* Gold/wood trim */}
+<rect x="14" y="44" width="272" height="112" rx="56" ry="56" fill="none" stroke="#c8922a" strokeWidth="5"/>
+{/* Felt */}
+<rect x="22" y="50" width="256" height="100" rx="50" ry="50" fill="#2d6a3f"/>
+{/* Inner felt highlight line */}
+<rect x="30" y="57" width="240" height="86" rx="43" ry="43" fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="1"/>
+{/* Center watermark */}
+<text x="150" y="97" textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.2)" fontFamily="Georgia,serif" letterSpacing="3">POKER NOTES</text>
+</svg>
+{seats.map(seat=>{
+const deg=angles[seat], rad=(deg-90)*Math.PI/180;
+// Stadium rim: half-width=140, half-height=60, center=150,100
+// Use ellipse approximation for seat placement on rim
+const W=128, H=52, CX2=150, CY2=100;
+const x=CX2+W*Math.cos(rad), y=CY2+H*Math.sin(rad);
+const isHero=mode!==“single”&&heroPos===seat;
+const isSingle=mode===“single”&&selected===seat;
+const vi=mode!==“single”?(villains||[]).findIndex(v=>v.pos===seat):-1;
+const isVillain=vi>=0;
+const isBTN=seat===“BTN”||seat===“BTN/SB”;
+let bg,col,bdr,shd;
+if(isVillain){const c=VILLAIN_COLORS[vi%VILLAIN_COLORS.length];bg=c;col=”#fff”;bdr=c;shd=`0 2px 8px ${c}99`;}
+else if(isHero){bg=HERO_COLOR;col=”#fff”;bdr=HERO_COLOR;shd=`0 2px 8px ${HERO_COLOR}99`;}
+else if(isSingle){bg=”#b08820”;col=”#fff”;bdr=”#b08820”;shd=“0 2px 8px #b0882099”;}
+else{bg=”#fff”;col=”#444”;bdr=”#bbb”;shd=“0 1px 4px rgba(0,0,0,0.18)”;}
+return(
+<button key={seat} onClick={()=>handleClick(seat)}
+style={{ position:“absolute”,left:x,top:y,transform:“translate(-50%,-50%)”,
+display:“inline-flex”,alignItems:“center”,gap:3,
+minWidth:34,height:22,padding:“0 6px”,borderRadius:11,
+fontSize:9,fontFamily:FONT,fontWeight:(isVillain||isHero||isSingle)?“bold”:“normal”,
+cursor:“pointer”,background:bg,color:col,border:`1.5px solid ${bdr}`,
+boxShadow:shd,transition:“all .15s”,zIndex:1,whiteSpace:“nowrap” }}>
+{isBTN&&(
+<span style={{ display:“inline-flex”,alignItems:“center”,justifyContent:“center”,
+width:12,height:12,borderRadius:“50%”,flexShrink:0,lineHeight:1,
+background:(isVillain||isHero||isSingle)?“rgba(255,255,255,0.9)”:”#1a1a1a”,
+color:(isVillain||isHero||isSingle)?”#333”:”#fff”,
+fontSize:7,fontWeight:“bold”,fontFamily:“Georgia,serif” }}>D</span>
+)}
+{seat}
+</button>
+);
+})}
+</div>
+</div>
+);
+}
+
+// ── Card Face ──────────────────────────────────────────────────────────────
+function CardFace({ card, size=“md”, dim=false, onClick, placeholder=false }) {
+const sz=size===“sm”?{w:26,h:36,fs:10,ss:8}:size===“lg”?{w:42,h:58,fs:16,ss:11}:{w:34,h:46,fs:13,ss:10};
+if(!card&&!placeholder)return null;
+if(!card)return(<div onClick={onClick} style={{ width:sz.w,height:sz.h,borderRadius:5,border:“1.5px dashed #ccc”,background:”#f8f8f6”,display:“flex”,alignItems:“center”,justifyContent:“center”,cursor:onClick?“pointer”:“default”,color:”#bbb”,fontSize:sz.ss }}>?</div>);
+const rank=card.slice(0,-1),suit=card.slice(-1);
+return(<div onClick={onClick} style={{ width:sz.w,height:sz.h,borderRadius:5,background:dim?”#e0e0e0”:”#fff”,border:`1.5px solid ${dim?"#ccc":"#888"}`,display:“flex”,flexDirection:“column”,alignItems:“center”,justifyContent:“center”,cursor:onClick?“pointer”:“default”,gap:1,opacity:dim?0.4:1,boxShadow:dim?“none”:“0 1px 4px rgba(0,0,0,0.2)”,transition:“all .12s” }}><span style={{ fontSize:sz.fs,fontWeight:“bold”,color:CARD_SUIT_COLOR[suit],lineHeight:1,fontFamily:“Georgia,serif” }}>{rank}</span><span style={{ fontSize:sz.ss,color:CARD_SUIT_COLOR[suit],lineHeight:1 }}>{CARD_SUIT_SYMBOL[suit]}</span></div>);
+}
+
+// ── Card Picker ────────────────────────────────────────────────────────────
+function CardPicker({ usedCards, onSelect, onClose }) {
+return(
+<div style={{ position:“fixed”,inset:0,zIndex:1000,background:“rgba(0,0,0,0.4)”,backdropFilter:“blur(4px)”,display:“flex”,alignItems:“center”,justifyContent:“center”,padding:16 }} onClick={onClose}>
+<div onClick={e=>e.stopPropagation()} style={{ background:”#fff”,border:“1px solid #ddd”,borderRadius:16,padding:“16px”,maxWidth:360,width:“100%”,maxHeight:“80vh”,overflowY:“auto”,boxShadow:“0 8px 32px rgba(0,0,0,0.2)” }}>
+<div style={{ display:“flex”,justifyContent:“space-between”,alignItems:“center”,marginBottom:12 }}>
+<span style={{ fontSize:12,color:”#555”,letterSpacing:“0.1em”,textTransform:“uppercase”,fontFamily:FONT }}>カードを選択</span>
+<button onClick={onClose} style={{ background:“none”,border:“none”,color:”#c04040”,cursor:“pointer”,fontSize:16 }}>✕</button>
+</div>
+{CARD_SUITS.map(suit=>(
+<div key={suit} style={{ marginBottom:10 }}>
+<div style={{ fontSize:11,color:CARD_SUIT_COLOR[suit],marginBottom:6,display:“flex”,alignItems:“center”,gap:4,fontFamily:FONT }}><span>{CARD_SUIT_SYMBOL[suit]}</span><span style={{ opacity:0.6 }}>{{s:“スペード”,h:“ハート”,d:“ダイヤ”,c:“クラブ”}[suit]}</span></div>
+<div style={{ display:“flex”,gap:5,flexWrap:“wrap” }}>
+{CARD_RANKS.map(rank=>{ const card=rank+suit,used=usedCards.includes(card); return <div key={card} onClick={()=>!used&&onSelect(card)}><CardFace card={card} size="sm" dim={used}/></div>; })}
+</div>
+</div>
+))}
+</div>
+</div>
+);
+}
+
+// ── Board Selector ─────────────────────────────────────────────────────────
+function BoardSelector({ board, onChange }) {
+const [picking,setPicking]=useState(null);
+const b=board||{flop:[null,null,null],turn:null,river:null};
+const used=usedBoardCards(b);
+const setCard=card=>{ if(!picking)return; const {street,index}=picking; let u={…b}; if(street===“flop”){const f=[…(b.flop||[null,null,null])];f[index]=card;u.flop=f;}else u[street]=card; onChange(u);setPicking(null); };
+const clearCard=(street,index,e)=>{ e.stopPropagation(); let u={…b}; if(street===“flop”){const f=[…(b.flop||[null,null,null])];f[index]=null;u.flop=f;}else u[street]=null; onChange(u); };
+return(
+<div style={{ marginBottom:14 }}>
+<div style={{ display:“flex”,alignItems:“center”,gap:8,marginBottom:8 }}>
+<span style={{ fontSize:10,padding:“2px 10px”,borderRadius:20,background:”#e8f5ee”,color:”#208050”,border:“1px solid #90d0a0”,fontFamily:FONT }}>コミュニティカード</span>
+{used.length>0&&<button onClick={()=>onChange({flop:[null,null,null],turn:null,river:null})} style={{ background:“none”,border:“1px solid #f0a0a0”,borderRadius:4,padding:“2px 8px”,color:”#c04040”,fontSize:10,cursor:“pointer”,fontFamily:FONT }}>全クリア</button>}
+</div>
+<div style={{ display:“flex”,gap:8,alignItems:“center”,flexWrap:“wrap” }}>
+<div style={{ display:“flex”,flexDirection:“column”,gap:3 }}>
+<span style={{ fontSize:9,color:STREET_COLOR[“Flop”],letterSpacing:“0.1em”,textAlign:“center”,fontFamily:FONT }}>FLOP</span>
+<div style={{ display:“flex”,gap:3 }}>
+{[0,1,2].map(i=>(
+<div key={i} style={{ position:“relative” }}>
+<div onClick={()=>!b.flop?.[i]&&setPicking({street:“flop”,index:i})}><CardFace card={b.flop?.[i]} size="md" placeholder/></div>
+{b.flop?.[i]&&<button onClick={e=>clearCard(“flop”,i,e)} style={{ position:“absolute”,top:-5,right:-5,width:14,height:14,borderRadius:“50%”,background:”#d03030”,border:“none”,color:”#fff”,fontSize:9,cursor:“pointer”,display:“flex”,alignItems:“center”,justifyContent:“center”,zIndex:2 }}>✕</button>}
+</div>
+))}
+</div>
+</div>
+<div style={{ color:”#ddd”,fontSize:12 }}>│</div>
+{[“turn”,“river”].map(street=>(
+<div key={street} style={{ display:“flex”,flexDirection:“column”,gap:3 }}>
+<span style={{ fontSize:9,color:STREET_COLOR[street===“turn”?“Turn”:“River”],letterSpacing:“0.1em”,textAlign:“center”,fontFamily:FONT }}>{street.toUpperCase()}</span>
+<div style={{ position:“relative” }}>
+<div onClick={()=>!b[street]&&setPicking({street,index:0})}><CardFace card={b[street]} size="md" placeholder/></div>
+{b[street]&&<button onClick={e=>clearCard(street,0,e)} style={{ position:“absolute”,top:-5,right:-5,width:14,height:14,borderRadius:“50%”,background:”#d03030”,border:“none”,color:”#fff”,fontSize:9,cursor:“pointer”,display:“flex”,alignItems:“center”,justifyContent:“center”,zIndex:2 }}>✕</button>}
+</div>
+</div>
+))}
+</div>
+{picking&&<CardPicker usedCards={used} onSelect={setCard} onClose={()=>setPicking(null)}/>}
+</div>
+);
+}
+
+// ── Action Row ─────────────────────────────────────────────────────────────
+function ActionRow({ act, index, onChange, onDelete, onMoveUp, onMoveDown, isFirst, isLast, villains, hand }) {
+const label = actorLabel(act.actor, villains);
+const actorOptions = [
+…(villains||[]).map((v,i)=>({ key:v.id, label:(villains||[]).length>1?`相手${i+1}`:“相手”, col:VILLAIN_COLORS[i%VILLAIN_COLORS.length], bg:VILLAIN_BGS[i%VILLAIN_BGS.length] })),
+{ key:“hero”, label:“自分”, col:HERO_COLOR, bg:HERO_BG },
+];
+
+// Get BB stack for the actor (for AllIn display)
+const getActorBB = () => {
+if(act.actor===“hero”) return hand?.heroBB||null;
+const v=(villains||[]).find(v=>v.id===act.actor);
+return v?.bb||null;
+};
+const actorBB = getActorBB();
+
+return(
+<div style={{ background:”#fafafa”,borderRadius:10,padding:“10px 12px”,marginBottom:8,borderLeft:`3px solid ${act.action?ACTION_COLOR[act.action]:"#ddd"}`,border:`1px solid #e8e8e8`,borderLeft:`3px solid ${act.action?ACTION_COLOR[act.action]:"#ddd"}` }}>
+<div style={{ display:“flex”,alignItems:“center”,gap:6,marginBottom:8 }}>
+<div style={{ display:“flex”,gap:3 }}>
+{actorOptions.map(opt=>(
+<button key={opt.key} onClick={()=>onChange({…act,actor:opt.key})} style={{ padding:“2px 8px”,borderRadius:20,fontSize:10,cursor:“pointer”,fontFamily:FONT,background:act.actor===opt.key?opt.bg:”#f0f0ee”,color:act.actor===opt.key?opt.col:”#888”,border:`1px solid ${act.actor===opt.key?opt.col+"66":"#ddd"}`,fontWeight:act.actor===opt.key?“bold”:“normal” }}>{opt.label}</button>
+))}
+</div>
+<span style={{ fontSize:10,color:”#bbb”,marginLeft:2,fontFamily:FONT }}>#{index+1}</span>
+<div style={{ display:“flex”,gap:2,marginLeft:“auto” }}>
+{!isFirst&&<button onClick={onMoveUp}   style={{ background:“none”,border:“1px solid #ddd”,borderRadius:4,padding:“1px 6px”,color:”#aaa”,cursor:“pointer”,fontSize:11 }}>↑</button>}
+{!isLast &&<button onClick={onMoveDown} style={{ background:“none”,border:“1px solid #ddd”,borderRadius:4,padding:“1px 6px”,color:”#aaa”,cursor:“pointer”,fontSize:11 }}>↓</button>}
+<button onClick={onDelete} style={{ background:“none”,border:“none”,color:”#c04040”,cursor:“pointer”,fontSize:13,padding:“0 2px” }}>✕</button>
+</div>
+</div>
+<div style={{ display:“flex”,flexWrap:“wrap”,gap:5,marginBottom:6 }}>
+{ACTIONS.map(a=>(
+<button key={a} onClick={()=>onChange({…act,action:act.action===a?null:a,size:null})} style={{ padding:“5px 11px”,borderRadius:20,fontSize:12,cursor:“pointer”,fontFamily:FONT,background:act.action===a?ACTION_COLOR[a]:”#f0f0ee”,color:act.action===a?”#fff”:”#555”,border:`1.5px solid ${act.action===a?ACTION_COLOR[a]:"#ddd"}`,fontWeight:act.action===a?“bold”:“normal” }}>{a}</button>
+))}
+</div>
+{/* AllIn: show actor’s BB stack */}
+{act.action===“AllIn”&&actorBB&&(
+<div style={{ display:“flex”,alignItems:“center”,gap:6,marginBottom:6,padding:“4px 8px”,borderRadius:6,background:“rgba(208,32,32,0.06)”,border:“1px solid rgba(208,32,32,0.2)” }}>
+<span style={{ fontSize:10,color:”#d02020”,fontFamily:FONT }}>オールイン</span>
+<span style={{ fontSize:12,color:”#d02020”,fontWeight:“bold”,fontFamily:FONT }}>{actorBB} BB</span>
+</div>
+)}
+{act.action&&[“Bet”,“Raise”,“3Bet”,“4Bet+”,“AllIn”].includes(act.action)&&(
+<div style={{ display:“flex”,flexWrap:“wrap”,gap:4,marginBottom:6 }}>
+{SIZES.map(sz=>(
+<button key={sz} onClick={()=>onChange({…act,size:act.size===sz?null:sz,betAmt:””})} style={{ padding:“4px 9px”,borderRadius:6,fontSize:11,cursor:“pointer”,fontFamily:FONT,background:act.size===sz?”#f5ead0”:”#f0f0ee”,color:act.size===sz?”#b08820”:”#666”,border:`1px solid ${act.size===sz?"#d4c090":"#ddd"}` }}>{sz}</button>
+))}
+</div>
+)}
+<input value={act.comment} onChange={e=>onChange({…act,comment:e.target.value})} placeholder={`${label}のメモ（状況・読みなど）`} style={{ …inp,fontSize:12,padding:“6px 10px” }}/>
+</div>
+);
+}
+
+// ── Hand Editor ────────────────────────────────────────────────────────────
+function HandEditor({ hand, onChange, onDelete, tableSize }) {
+const [open,setOpen]=useState(true);
+const [openRangeId,setOpenRangeId]=useState(null);
+const [showHeroGrid,setShowHeroGrid]=useState(false);
+
+const villains = hand.villains || [newVillain()];
+const setVillains = vs => onChange({…hand,villains:vs});
+const updateVillain = (id,patch) => setVillains(villains.map(v=>v.id===id?{…v,…patch}:v));
+const addVillain = () => { if(villains.length>=4)return; setVillains([…villains,newVillain()]); };
+const removeVillain = id => {
+if(villains.length<=1)return;
+const nv=villains.filter(v=>v.id!==id);
+const ns={};STREETS.forEach(s=>{ ns[s]=(hand.streets[s]||[]).map(a=>a.actor===id?{…a,actor:nv[0].id}:a); });
+onChange({…hand,villains:nv,streets:ns});
+};
+
+const setStreetActions=(street,actions)=>onChange({…hand,streets:{…hand.streets,[street]:actions}});
+const addAction=(street,actor)=>{ const acts=hand.streets[street]||[]; setStreetActions(street,[…acts,newAction(actor||villains[0].id)]); };
+const updateAction=(street,id,patch)=>setStreetActions(street,(hand.streets[street]||[]).map(a=>a.id===id?{…a,…patch}:a));
+const removeAction=(street,id)=>setStreetActions(street,(hand.streets[street]||[]).filter(a=>a.id!==id));
+const moveAction=(street,i,dir)=>{ const arr=[…(hand.streets[street]||[])]; const j=i+dir; if(j<0||j>=arr.length)return; [arr[i],arr[j]]=[arr[j],arr[i]]; setStreetActions(street,arr); };
+
+const heroLabel=hand.heroHand||null;
+const boardCards=usedBoardCards(hand.board||{});
+const actionsSummary=STREETS.flatMap(s=>(hand.streets[s]||[]).filter(a=>a.action).map(a=>({actor:a.actor,action:a.action})));
+
+const MiniCard = ({card}) => { const r=card.slice(0,-1),s=card.slice(-1),isR=s===“h”||s===“d”; return <span style={{ fontSize:9,padding:“1px 4px”,borderRadius:3,background:”#fff”,color:isR?”#e05a5a”:”#1a1a1a”,fontFamily:“monospace”,fontWeight:“bold”,border:“1px solid #ccc”,lineHeight:1.4 }}>{r}{CARD_SUIT_SYMBOL[s]}</span>; };
+
+return(
+<div style={{ background:”#fff”,border:“1px solid #e0e0e0”,borderRadius:12,overflow:“hidden”,marginBottom:10,boxShadow:“0 1px 4px rgba(0,0,0,0.06)” }}>
+{/* Header */}
+<div onClick={()=>setOpen(o=>!o)} style={{ display:“flex”,alignItems:“center”,justifyContent:“space-between”,padding:“10px 14px”,cursor:“pointer”,background:open?”#f8f6f0”:”#fff”,borderBottom:open?“1px solid #eee”:“none” }}>
+<div style={{ display:“flex”,alignItems:“center”,gap:5,flexWrap:“wrap”,flex:1,minWidth:0 }}>
+<span style={{ fontSize:11,color:”#999”,fontFamily:“monospace”,flexShrink:0 }}>{hand.date}</span>
+{hand.avgBB&&<span style={{ fontSize:10,padding:“1px 5px”,borderRadius:4,background:”#f5ead0”,color:”#b08820”,fontFamily:FONT,border:“1px solid #d4c090” }}>avg {hand.avgBB}BB</span>}
+{(hand.playersLeft||hand.playersTot)&&<span style={{ fontSize:10,padding:“1px 5px”,borderRadius:4,background:”#e8f0ff”,color:”#3060a0”,fontFamily:FONT,border:“1px solid #a0b8e0” }}>{hand.playersLeft||”?”}/{hand.playersTot||”?”}人</span>}
+{villains.map((v,i)=>(
+<span key={v.id} style={{ display:“inline-flex”,gap:3 }}>
+{v.pos&&<span style={{ fontSize:10,padding:“1px 5px”,borderRadius:4,background:VILLAIN_BGS[i%VILLAIN_BGS.length],color:VILLAIN_COLORS[i%VILLAIN_COLORS.length],fontFamily:FONT,border:`1px solid ${VILLAIN_BORDERS[i%VILLAIN_BORDERS.length]}` }}>{villains.length>1?`相${i+1}`:“相”}{v.pos}</span>}
+{(v.range||[]).length>0&&<span style={{ fontSize:10,padding:“1px 5px”,borderRadius:4,background:VILLAIN_BGS[i%VILLAIN_BGS.length],color:VILLAIN_COLORS[i%VILLAIN_COLORS.length],fontFamily:FONT,border:`1px solid ${VILLAIN_BORDERS[i%VILLAIN_BORDERS.length]}` }}>{totalCombos(v.range)}c</span>}
+</span>
+))}
+{hand.heroPos&&<span style={{ fontSize:10,padding:“1px 5px”,borderRadius:4,background:HERO_BG,color:HERO_COLOR,fontFamily:FONT,border:`1px solid ${HERO_BORDER}` }}>自{hand.heroPos}</span>}
+{heroLabel&&(()=>{ const [c1,c2]=heroHandToCards(heroLabel); return <span style={{ display:“inline-flex”,gap:2 }}>{[c1,c2].map((card,i)=><MiniCard key={i} card={card}/>)}</span>; })()}
+{boardCards.length>0&&(
+<div style={{ display:“flex”,gap:2 }}>
+{boardCards.map((card,i)=>{ const r=card.slice(0,-1),s=card.slice(-1),isR=s===“h”||s===“d”; return <span key={i} style={{ fontSize:9,padding:“1px 3px”,borderRadius:3,background:”#fff”,color:isR?”#e05a5a”:”#1a1a1a”,fontFamily:“monospace”,fontWeight:“bold”,border:“1px solid #ccc” }}>{r}{CARD_SUIT_SYMBOL[s]}</span>; })}
+</div>
+)}
+{actionsSummary.slice(0,6).map((a,i)=>{
+const vIdx=a.actor===“hero”?-1:villains.findIndex(v=>v.id===a.actor);
+const col=a.actor===“hero”?HERO_COLOR:VILLAIN_COLORS[(vIdx>=0?vIdx:0)%VILLAIN_COLORS.length];
+const bg=a.actor===“hero”?HERO_BG:VILLAIN_BGS[(vIdx>=0?vIdx:0)%VILLAIN_BGS.length];
+return <span key={i} style={{ fontSize:9,padding:“1px 5px”,borderRadius:4,background:bg,color:col,fontFamily:FONT }}>{a.action}</span>;
+})}
+{actionsSummary.length>6&&<span style={{ fontSize:9,color:”#bbb”,fontFamily:FONT }}>+{actionsSummary.length-6}</span>}
+</div>
+<div style={{ display:“flex”,gap:8,alignItems:“center”,flexShrink:0 }}>
+<button onClick={e=>{e.stopPropagation();onDelete();}} style={{ background:“none”,border:“none”,color:”#c04040”,cursor:“pointer”,fontSize:14,padding:0,lineHeight:1 }}>✕</button>
+<span style={{ color:”#aaa”,fontSize:14 }}>{open?“▲”:“▼”}</span>
+</div>
+</div>
+
+```
+  {open&&(
+    <div style={{ padding:"12px 14px 14px" }}>
+
+      {/* Ante toggle */}
+      <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:10 }}>
+        <span style={{ fontSize:10,color:"#888",fontFamily:FONT }}>アンティ</span>
+        {[true,false].map(v=>(
+          <button key={String(v)} onClick={()=>onChange({...hand,ante:v})}
+            style={{ padding:"3px 12px",borderRadius:20,fontSize:11,cursor:"pointer",fontFamily:FONT,
+              background:hand.ante===v?(v?"#2a7a40":"#888"):"#f0f0ee",
+              color:hand.ante===v?"#fff":"#777",
+              border:`1px solid ${hand.ante===v?(v?"#2a7a40":"#888"):"#ddd"}`,
+              fontWeight:hand.ante===v?"bold":"normal" }}>
+            {v?"あり":"なし"}
+          </button>
+        ))}
+        <span style={{ fontSize:10,color:"#aaa",fontFamily:FONT }}>
+          {hand.ante ? "BB1 + SB0.5 + Ante1 = 2.5BB" : "BB1 + SB0.5 = 1.5BB"}
+        </span>
+      </div>
+
+      {/* Stack / Players info */}
+      <div style={{ display:"flex",gap:10,marginBottom:14 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:10,color:"#888",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5,fontFamily:FONT }}>アベレージ BB</div>
+          <div style={{ position:"relative" }}>
+            <input
+              value={hand.avgBB||""}
+              onChange={e=>onChange({...hand,avgBB:e.target.value})}
+              type="number"
+              placeholder="例: 35"
+              style={{ ...inp,paddingRight:32 }}
+            />
+            <span style={{ position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:11,color:"#aaa",fontFamily:FONT,pointerEvents:"none" }}>BB</span>
+          </div>
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:10,color:"#888",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5,fontFamily:FONT }}>残りプレイヤー</div>
+          <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+            <input
+              value={hand.playersLeft||""}
+              onChange={e=>onChange({...hand,playersLeft:e.target.value})}
+              type="number"
+              placeholder="残"
+              style={{ ...inp,textAlign:"center" }}
+            />
+            <span style={{ fontSize:13,color:"#bbb",flexShrink:0 }}>/</span>
+            <input
+              value={hand.playersTot||""}
+              onChange={e=>onChange({...hand,playersTot:e.target.value})}
+              type="number"
+              placeholder="全"
+              style={{ ...inp,textAlign:"center" }}
+            />
+            <span style={{ fontSize:11,color:"#aaa",flexShrink:0,fontFamily:FONT }}>人</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Position */}
+      <PokerTable mode="multi" tableSize={tableSize||"6max"}
+        heroPos={hand.heroPos||""} heroBB={hand.heroBB||""} villains={villains}
+        onChangeHeroPos={v=>onChange({...hand,heroPos:v})}
+        onChangeHeroBB={v=>onChange({...hand,heroBB:v})}
+        onChangeVillainPos={(id,pos)=>updateVillain(id,{pos})}
+        onChangeVillainBB={(id,bb)=>updateVillain(id,{bb})}/>
+
+      {/* Villain sections */}
+      {villains.map((v,vi)=>(
+        <div key={v.id} style={{ marginBottom:14,padding:"12px",borderRadius:10,background:"#fafafa",border:`1px solid ${VILLAIN_BORDERS[vi%VILLAIN_BORDERS.length]}` }}>
+          <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:8 }}>
+            <span style={{ fontSize:11,fontWeight:"bold",color:VILLAIN_COLORS[vi%VILLAIN_COLORS.length],fontFamily:FONT }}>{villains.length>1?`相手${vi+1}`:"相手"}</span>
+            {villains.length>1&&<button onClick={()=>removeVillain(v.id)} style={{ background:"none",border:"1px solid #f0a0a0",borderRadius:4,padding:"1px 7px",color:"#c04040",fontSize:10,cursor:"pointer",fontFamily:FONT }}>削除</button>}
+            <span style={{ marginLeft:"auto",fontSize:10,color:"#bbb",fontFamily:FONT }}>レンジ</span>
+            <button onClick={()=>setOpenRangeId(openRangeId===v.id?null:v.id)} style={{ background:"none",border:`1px dashed ${VILLAIN_COLORS[vi%VILLAIN_COLORS.length]}88`,borderRadius:6,padding:"2px 10px",color:VILLAIN_COLORS[vi%VILLAIN_COLORS.length],fontSize:11,cursor:"pointer",fontFamily:FONT }}>
+              {openRangeId===v.id?"閉じる":((v.range||[]).length>0?`${totalCombos(v.range)}コンボ ✎`:"選択する")}
+            </button>
+          </div>
+          {openRangeId===v.id&&(
+            <div style={{ background:"#fff",borderRadius:8,padding:"10px",border:`1px solid ${VILLAIN_BORDERS[vi%VILLAIN_BORDERS.length]}` }}>
+              <HandRangeGrid selected={v.range||[]} onChange={r=>updateVillain(v.id,{range:r})} mode="multi" accentColor={VILLAIN_COLORS[vi%VILLAIN_COLORS.length]}/>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {villains.length<4&&(
+        <button onClick={addVillain} style={{ width:"100%",marginBottom:14,fontSize:11,background:"#fff5f5",border:"1px dashed #f0a0a0",color:"#c04040",borderRadius:8,padding:"7px 0",cursor:"pointer",fontFamily:FONT }}>＋ 相手を追加</button>
+      )}
+
+      {/* Hero hand */}
+      <div style={{ marginBottom:14 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:6 }}>
+          <span style={{ fontSize:10,padding:"2px 10px",borderRadius:20,background:HERO_BG,color:HERO_COLOR,border:`1px solid ${HERO_BORDER}`,fontFamily:FONT }}>自分のハンド</span>
+          <button onClick={()=>setShowHeroGrid(v=>!v)} style={{ background:"none",border:`1px dashed ${HERO_COLOR}66`,borderRadius:6,padding:"2px 10px",color:HERO_COLOR,fontSize:11,cursor:"pointer",fontFamily:FONT,display:"inline-flex",alignItems:"center",gap:4 }}>
+            {showHeroGrid ? "閉じる" : hand.heroHand ? (()=>{ const [c1,c2]=heroHandToCards(hand.heroHand); return <span style={{ display:"inline-flex",gap:3,alignItems:"center" }}>{[c1,c2].map((card,i)=>{ const r=card.slice(0,-1),s=card.slice(-1),isR=s==="h"||s==="d"; return <span key={i} style={{ fontSize:11,padding:"2px 5px",borderRadius:4,background:"#fff",color:isR?"#e05a5a":"#1a1a1a",fontFamily:"monospace",fontWeight:"bold",border:"1px solid #bbb",lineHeight:1.3 }}>{r}{CARD_SUIT_SYMBOL[s]}</span>; })}<span style={{ fontSize:10,color:"#aaa" }}>✎</span></span>; })() : "選択する"}
+          </button>
+        </div>
+        {showHeroGrid&&<div style={{ background:"#f8f8f6",borderRadius:10,padding:"12px",border:`1px solid ${HERO_BORDER}` }}><HandRangeGrid selected={hand.heroHand} onChange={v=>onChange({...hand,heroHand:v})} mode="single" accentColor={HERO_COLOR}/></div>}
+      </div>
+
+      {/* Board */}
+      <BoardSelector board={hand.board} onChange={v=>onChange({...hand,board:v})}/>
+
+      {/* Streets */}
+      {(()=>{ const pots = calcPots(hand); return STREETS.map(street=>(
+        <div key={street} style={{ marginBottom:16 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:8,flexWrap:"wrap" }}>
+            <span style={{ fontSize:10,padding:"2px 10px",borderRadius:20,background:STREET_COLOR[street]+"18",color:STREET_COLOR[street],border:`1px solid ${STREET_COLOR[street]}44`,letterSpacing:"0.08em",fontFamily:FONT }}>{street.toUpperCase()}</span>
+            {street!=="Preflop"&&<span style={{ fontSize:10,color:"#aaa",fontFamily:FONT,background:"#f5f5f2",border:"1px solid #e8e8e4",borderRadius:10,padding:"1px 8px" }}>ポット <strong style={{ color:"#666" }}>{pots[street]}BB</strong></span>}
+            {street==="Preflop"&&<span style={{ fontSize:10,color:"#aaa",fontFamily:FONT,background:"#f5f5f2",border:"1px solid #e8e8e4",borderRadius:10,padding:"1px 8px" }}>初期 <strong style={{ color:"#666" }}>{pots.Preflop}BB</strong></span>}
+            {villains.map((v,vi)=>(
+              <button key={v.id} onClick={()=>addAction(street,v.id)} style={{ background:"none",border:`1px dashed ${VILLAIN_COLORS[vi%VILLAIN_COLORS.length]}88`,borderRadius:6,padding:"2px 8px",color:VILLAIN_COLORS[vi%VILLAIN_COLORS.length],fontSize:10,cursor:"pointer",fontFamily:FONT }}>+ {villains.length>1?`相手${vi+1}`:"相手"}</button>
+            ))}
+            <button onClick={()=>addAction(street,"hero")} style={{ background:"none",border:`1px dashed ${HERO_COLOR}66`,borderRadius:6,padding:"2px 8px",color:HERO_COLOR,fontSize:10,cursor:"pointer",fontFamily:FONT }}>+ 自分</button>
+          </div>
+          {(hand.streets[street]||[]).length===0&&<div style={{ fontSize:11,color:"#ccc",padding:"4px 0",fontStyle:"italic",fontFamily:FONT }}>アクションなし</div>}
+          {(hand.streets[street]||[]).map((act,i)=>(
+            <ActionRow key={act.id} act={act} index={i}
+              isFirst={i===0} isLast={i===(hand.streets[street]||[]).length-1}
+              villains={villains} hand={hand}
+              onChange={updated=>updateAction(street,act.id,updated)}
+              onDelete={()=>removeAction(street,act.id)}
+              onMoveUp={()=>moveAction(street,i,-1)}
+              onMoveDown={()=>moveAction(street,i,1)}/>
+          ))}
+        </div>
+      ));})()}
+
+      {/* Action Summary Timeline */}
+      {(()=>{
+        const streetData = STREETS.map(street=>({
+          street,
+          acts:(hand.streets[street]||[]).filter(a=>a.action),
+        }));
+        const hasAny = streetData.some(d=>d.acts.length>0);
+        if(!hasAny) return null;
+
+        const pots = calcPots(hand);
+        const board = hand.board||{flop:[null,null,null],turn:null,river:null};
+
+        // Compute per-action BB amounts by simulating street-by-street
+        const actionBBMap = {}; // actId → BB amount involved
+        const endPots = {};
+        (() => {
+          let pot2 = hand.ante ? 2.5 : 1.5;
+          const BLIND2 = { "BB":1, "SB":0.5, "BTN/SB":0.5 };
+          const getB2 = pos => BLIND2[(pos||"").toUpperCase()]||0;
+          const getAP = actor => {
+            if(actor==="hero") return hand.heroPos||"";
+            const v=(hand.villains||[]).find(v=>v.id===actor);
+            return v?v.pos||"":"";
+          };
+          const sz2bb = (size,pot,cb,isR) => {
+            if(!size) return 0;
+            const base=isR?cb:1;
+            if(size==="min") return cb*2;
+            if(size==="2x") return base*2; if(size==="2.5x") return base*2.5;
+            if(size==="3x") return base*3; if(size==="4x") return base*4; if(size==="5x+") return base*5;
+            if(size==="¼pot") return pot*0.25; if(size==="⅓pot") return pot*(1/3);
+            if(size==="½pot") return pot*0.5; if(size==="⅔pot") return pot*(2/3);
+            if(size==="¾pot") return pot*0.75; if(size==="pot") return pot;
+            return 0;
+          };
+          STREETS.forEach(street=>{
+            const committed={};
+            if(street==="Preflop"){
+              (hand.streets[street]||[]).forEach(a=>{ if(!(a.actor in committed)) committed[a.actor]=getB2(getAP(a.actor)); });
+            }
+            let cb=street==="Preflop"?1:0;
+            (hand.streets[street]||[]).forEach(a=>{
+              if(!a.action)return;
+              if(!(a.actor in committed))committed[a.actor]=0;
+              if(["Bet","Raise","3Bet","4Bet+","AllIn"].includes(a.action)){
+                const isR=["Raise","3Bet","4Bet+"].includes(a.action)&&cb>0;
+                // AllIn: use actor's actual BB stack if available
+                const actorStack = a.action==="AllIn" ? (()=>{
+                  if(a.actor==="hero") return parseFloat(hand.heroBB)||0;
+                  const v=(hand.villains||[]).find(v=>v.id===a.actor);
+                  return parseFloat(v?.bb)||0;
+                })() : 0;
+                const tb = actorStack>0 ? actorStack : sz2bb(a.size,pot2,cb,isR);
+                if(tb>0){
+                  const net=Math.max(0,tb-committed[a.actor]);
+                  actionBBMap[a.id]=Math.round(net*10)/10; // ★ 追加投入額
+                  pot2+=net; committed[a.actor]=tb; cb=tb;
+                }
+              } else if(a.action==="Call"){
+                const net=Math.max(0,cb-committed[a.actor]);
+                actionBBMap[a.id]=Math.round(net*10)/10; // ★ 実際の追加額
+                pot2+=net; committed[a.actor]=cb;
+              } else if(a.action==="Limp"){
+                const net=Math.max(0,1-committed[a.actor]);
+                actionBBMap[a.id]=Math.round(net*10)/10; // ★ 実際の追加額
+                pot2+=net; committed[a.actor]=1; if(cb<1)cb=1;
+              }
+            });
+            endPots[street]=Math.round(pot2*10)/10;
+          });
+        })();
+
+        const getActorInfo = actor => {
+          if(actor==="hero") return { label:"自分", col:HERO_COLOR, bg:HERO_BG, bdr:HERO_BORDER };
+          const vi=villains.findIndex(v=>v.id===actor);
+          const i=vi>=0?vi:0;
+          return { label:villains.length>1?`相手${i+1}`:"相手", col:VILLAIN_COLORS[i%VILLAIN_COLORS.length], bg:VILLAIN_BGS[i%VILLAIN_BGS.length], bdr:VILLAIN_BORDERS[i%VILLAIN_BORDERS.length] };
+        };
+
+        // Actor order = first appearance order across all streets' actions
+        const actorOrder = [];
+        streetData.forEach(({acts})=>acts.forEach(a=>{
+          if(!actorOrder.includes(a.actor)) actorOrder.push(a.actor);
+        }));
+
+        const streetsWithActs = streetData.filter(d=>d.acts.length>0);
+
+        // Board cards for each street header
+        const streetCards = {
+          Preflop: [],
+          Flop: (board.flop||[]).filter(Boolean),
+          Turn: board.turn ? [board.turn] : [],
+          River: board.river ? [board.river] : [],
+        };
+
+        const MiniCardInline = ({card}) => {
+          if(!card) return null;
+          const r=card.slice(0,-1), s=card.slice(-1);
+          const isRed = s==="h"||s==="d";
+          return (
+            <span style={{ display:"inline-flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:16,height:22,borderRadius:3,background:"#fff",border:"1px solid #bbb",boxShadow:"0 1px 2px rgba(0,0,0,0.12)",flexShrink:0 }}>
+              <span style={{ fontSize:8,fontWeight:"bold",color:isRed?"#e05a5a":"#1a1a1a",lineHeight:1,fontFamily:"Georgia,serif" }}>{r}</span>
+              <span style={{ fontSize:7,color:isRed?"#e05a5a":"#1a1a1a",lineHeight:1 }}>{CARD_SUIT_SYMBOL[s]}</span>
+            </span>
+          );
+        };
+
+        return(
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:10,color:"#888",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,fontFamily:FONT }}>アクション総括</div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ borderCollapse:"separate",borderSpacing:"3px 2px",width:"100%" }}>
+                <thead>
+                  <tr>
+                    <th style={{ width:44 }}/>
+                    {streetsWithActs.map(({street})=>(
+                      <th key={street} style={{ padding:"0 2px 6px",textAlign:"center",verticalAlign:"bottom" }}>
+                        <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:3 }}>
+                          {/* Board cards for this street */}
+                          {streetCards[street].length>0&&(
+                            <div style={{ display:"flex",gap:2,justifyContent:"center" }}>
+                              {streetCards[street].map((card,i)=><MiniCardInline key={i} card={card}/>)}
+                            </div>
+                          )}
+                          <span style={{ fontSize:9,padding:"1px 7px",borderRadius:10,background:STREET_COLOR[street]+"15",color:STREET_COLOR[street],border:`1px solid ${STREET_COLOR[street]}44`,fontFamily:FONT,letterSpacing:"0.05em",whiteSpace:"nowrap" }}>
+                            {street.toUpperCase()}
+                          </span>
+                          <span style={{ fontSize:9,color:"#aaa",fontFamily:FONT,background:"#f5f5f2",border:"1px solid #e8e8e4",borderRadius:8,padding:"0px 6px",whiteSpace:"nowrap" }}>
+                            {street==="Preflop"?"初期":"開始"} <strong style={{ color:"#666" }}>{pots[street]}BB</strong>
+                          </span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* 時系列順: 各ストリートの最大アクション数だけ行を作り、
+                      その行番号に対応するアクションを各アクター列に配置 */}
+                  {(()=>{
+                    const maxRows = Math.max(0, ...streetsWithActs.map(({street})=>
+                      (hand.streets[street]||[]).filter(a=>a.action).length
+                    ));
+                    return Array.from({length:maxRows}).map((_,rowIdx)=>(
+                      <tr key={rowIdx}>
+                        {/* Actor label column: show label of the actor who acts in this row
+                            (use the first street that has an action at this rowIdx) */}
+                        <td style={{ paddingRight:4,textAlign:"right",verticalAlign:"middle",whiteSpace:"nowrap",minWidth:40 }}>
+                          {(()=>{
+                            // find which actor acts at rowIdx in any street
+                            for(const {street} of streetsWithActs){
+                              const seqActs=(hand.streets[street]||[]).filter(a=>a.action);
+                              if(seqActs[rowIdx]){
+                                const actor=seqActs[rowIdx].actor;
+                                const {label,col}=getActorInfo(actor);
+                                return <span style={{ fontSize:10,fontWeight:"bold",color:col,fontFamily:FONT }}>{label}</span>;
+                              }
+                            }
+                            return null;
+                          })()}
+                        </td>
+                        {streetsWithActs.map(({street})=>{
+                          const seqActs=(hand.streets[street]||[]).filter(a=>a.action);
+                          const act=seqActs[rowIdx]||null;
+                          if(!act) return <td key={street} style={{ padding:"1px 2px" }}><div style={{ height:26 }}/></td>;
+                          const {bg,bdr}=getActorInfo(act.actor);
+                          const acol=ACTION_COLOR[act.action]||"#888";
+                          const bbAmt=actionBBMap[act.id];
+                          const showBB=bbAmt!=null&&["Bet","Raise","3Bet","4Bet+","AllIn","Call","Limp"].includes(act.action);
+                          return(
+                            <td key={street} style={{ padding:"1px 2px",verticalAlign:"middle",textAlign:"center" }}>
+                              <div style={{ padding:"3px 6px",borderRadius:6,background:bg,border:`1px solid ${bdr}`,fontSize:10,fontFamily:FONT,color:acol,fontWeight:"bold",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3 }}>
+                                <span style={{ fontSize:8,color:"#ccc",marginRight:1 }}>#{rowIdx+1}</span>
+                                <span>{act.action}</span>
+                                {showBB&&<span style={{ fontSize:9,color:"#888",fontWeight:"normal" }}>{bbAmt}BB</span>}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ));
+                  })()}
+                  {/* End-of-street pot row */}
+                  <tr>
+                    <td style={{ paddingRight:4,textAlign:"right",paddingTop:4 }}>
+                      <span style={{ fontSize:9,color:"#aaa",fontFamily:FONT }}>計</span>
+                    </td>
+                    {streetsWithActs.map(({street})=>(
+                      <td key={street} style={{ padding:"4px 2px 1px",textAlign:"center",borderTop:"1px solid #eee" }}>
+                        <span style={{ fontSize:10,fontFamily:FONT,color:"#666",background:"#f5f5f2",border:"1px solid #e0e0dc",borderRadius:6,padding:"2px 7px",whiteSpace:"nowrap" }}>
+                          <strong style={{ color:"#444" }}>{endPots[street]}BB</strong>
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      <FLabel label="ハンドメモ">
+        <textarea value={hand.note} onChange={e=>onChange({...hand,note:e.target.value})} rows={2} style={{ ...inp,resize:"vertical",lineHeight:1.6 }} placeholder="このハンドの総評・気づき..."/>
+      </FLabel>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ── Player Form ────────────────────────────────────────────────────────────
+function PlayerForm({ initial, onSave, onCancel }) {
+const [p,setP]=useState(initial);
+const f=patch=>setP(prev=>({…prev,…patch}));
+const toggleTend=t=>f({tendencies:p.tendencies.includes(t)?p.tendencies.filter(x=>x!==t):[…p.tendencies,t]});
+const addHand=()=>f({hands:[…(p.hands||[]),newHand()]});
+const updateHand=(id,h)=>f({hands:p.hands.map(x=>x.id===id?h:x)});
+const deleteHand=id=>f({hands:p.hands.filter(x=>x.id!==id)});
+
+return(
+<div style={{ padding:“16px” }}>
+<div style={{ display:“flex”,justifyContent:“space-between”,alignItems:“center”,marginBottom:20 }}>
+<button onClick={onCancel} style={ghostBtn}>← 戻る</button>
+<button onClick={()=>p.name.trim()&&onSave(p)} style={{ …ghostBtn,background:p.name.trim()?”#2a7a40”:”#e0e0e0”,color:p.name.trim()?”#fff”:”#aaa”,border:“none”,fontWeight:“bold” }}>保存</button>
+</div>
+<div style={{ display:“flex”,gap:10,marginBottom:18,justifyContent:“center” }}>
+{SUITS.map(s=><button key={s} onClick={()=>f({suit:s})} style={{ width:50,height:50,borderRadius:“50%”,fontSize:24,background:p.suit===s?”#f5ead0”:”#f0f0ee”,border:`2px solid ${p.suit===s?"#b08820":"#ddd"}`,color:SUIT_COLOR(s),cursor:“pointer” }}>{s}</button>)}
+</div>
+<FLabel label="プレイヤー名 *"><input value={p.name} onChange={e=>f({name:e.target.value})} placeholder=“例: 田中さん” style={inp}/></FLabel>
+<FLabel label="テーブルサイズ">
+<div style={{ display:“flex”,flexWrap:“wrap”,gap:5 }}>
+{TABLE_SIZES.map(ts=><button key={ts} onClick={()=>f({tableSize:ts,seat:””})} style={{ padding:“5px 10px”,borderRadius:6,fontSize:12,cursor:“pointer”,fontFamily:FONT,background:p.tableSize===ts?”#f5ead0”:”#f0f0ee”,border:`1px solid ${p.tableSize===ts?"#b08820":"#ddd"}`,color:p.tableSize===ts?”#b08820”:”#555” }}>{ts}</button>)}
+</div>
+</FLabel>
+<FLabel label="スキル">
+<div style={{ display:“flex”,gap:6 }}>
+{SKILL_LEVELS.map(s=><button key={s} onClick={()=>f({skill:s})} style={{ flex:1,padding:“7px 0”,borderRadius:8,fontSize:12,cursor:“pointer”,fontFamily:FONT,background:p.skill===s?”#f5ead0”:”#f0f0ee”,border:`1px solid ${p.skill===s?"#b08820":"#ddd"}`,color:p.skill===s?”#b08820”:”#555” }}>{s}</button>)}
+</div>
+</FLabel>
+<FLabel label="傾向（複数可）">
+<div style={{ display:“flex”,flexWrap:“wrap”,gap:5 }}>
+{TENDENCIES.map(t=><button key={t} onClick={()=>toggleTend(t)} style={{ padding:“5px 11px”,borderRadius:20,fontSize:12,cursor:“pointer”,fontFamily:FONT,background:p.tendencies.includes(t)?”#f5ead0”:”#f0f0ee”,border:`1px solid ${p.tendencies.includes(t)?"#b08820":"#ddd"}`,color:p.tendencies.includes(t)?”#b08820”:”#555” }}>{t}</button>)}
+</div>
+</FLabel>
+<div style={{ display:“flex”,gap:10 }}>
+<FLabel label=“VPIP%” style={{ flex:1 }}><input value={p.vpip} onChange={e=>f({vpip:e.target.value})} placeholder=“28” type=“number” style={inp}/></FLabel>
+<FLabel label=“PFR%”  style={{ flex:1 }}><input value={p.pfr}  onChange={e=>f({pfr:e.target.value})}  placeholder=“18” type=“number” style={inp}/></FLabel>
+</div>
+<FLabel label="全体メモ"><textarea value={p.notes} onChange={e=>f({notes:e.target.value})} rows={3} placeholder=“特徴・読み・注意点…” style={{ …inp,resize:“vertical”,lineHeight:1.6 }}/></FLabel>
+<div style={{ marginTop:4 }}>
+<div style={{ display:“flex”,justifyContent:“space-between”,alignItems:“center”,marginBottom:12 }}>
+<span style={{ fontSize:10,color:”#888”,letterSpacing:“0.12em”,textTransform:“uppercase”,fontFamily:FONT }}>ハンド履歴 ({(p.hands||[]).length})</span>
+<button onClick={addHand} style={{ …ghostBtn,fontSize:12,background:”#e8f0ff”,border:“1px solid #a0b8e0”,color:”#3060a0” }}>＋ ハンド追加</button>
+</div>
+{(p.hands||[]).map(h=><HandEditor key={h.id} hand={h} tableSize={p.tableSize} onChange={updated=>updateHand(h.id,updated)} onDelete={()=>deleteHand(h.id)}/>)}
+</div>
+</div>
+);
+}
+
+// ── Main App ───────────────────────────────────────────────────────────────
+function App() {
+const [players,   setPlayers]   = useState(load);
+const [view,      setView]      = useState(“list”);
+const [selectedId,setSelectedId]= useState(null);
+const [editData,  setEditData]  = useState(null);
+const [search,    setSearch]    = useState(””);
+
+const save=updated=>{ setPlayers(updated); persist(updated); };
+const selected=players.find(p=>p.id===selectedId);
+const filtered=players.filter(p=>p.name.toLowerCase().includes(search.toLowerCase())||p.tendencies.some(t=>t.includes(search)));
+
+const actionSummary=player=>{
+const map={};
+(player.hands||[]).forEach(h=>STREETS.forEach(s=>(h.streets[s]||[]).forEach(a=>{ if(a.action)map[a.action]=(map[a.action]||0)+1; })));
+return map;
+};
+
+const openDetail=p=>{ setSelectedId(p.id); setView(“detail”); };
+const openNew=()=>{ setEditData(newPlayer()); setView(“edit”); };
+const openEdit=()=>{ setEditData({…selected,hands:(selected.hands||[])}); setView(“edit”); };
+const handleSave=p=>{ const exists=players.find(x=>x.id===p.id); const updated=exists?players.map(x=>x.id===p.id?p:x):[…players,p]; save(updated); setSelectedId(p.id); setView(“detail”); };
+const handleDelete=id=>{ save(players.filter(p=>p.id!==id)); setView(“list”); };
+
+const [exportMsg, setExportMsg] = useState(””);
+
+const exportData = async () => {
+const json = JSON.stringify(players, null, 2);
+try {
+await navigator.clipboard.writeText(json);
+setExportMsg(“✓ コピー済み”);
+setTimeout(()=>setExportMsg(””), 3000);
+} catch {
+// fallback: show in textarea modal
+setExportMsg(“copy_failed”);
+}
+};
+const [showExportModal, setShowExportModal] = useState(false);
+const exportJson = JSON.stringify(players, null, 2);
+
+const importData = e => {
+const file = e.target.files[0];
+if (!file) return;
+const reader = new FileReader();
+reader.onload = ev => {
+try {
+const parsed = JSON.parse(ev.target.result);
+if (Array.isArray(parsed)) {
+save(parsed);
+alert(`${parsed.length}人のデータをインポートしました`);
+} else {
+alert(“フォーマットが正しくありません”);
+}
+} catch { alert(“JSONの読み込みに失敗しました”); }
+};
+reader.readAsText(file);
+e.target.value = “”;
+};
+
+return(
+<div style={{ minHeight:“100vh”,background:”#f5f5f2”,fontFamily:FONT,color:”#1a1a1a” }}>
+<div style={{ maxWidth:680,margin:“0 auto”,paddingBottom:60 }}>
+
+```
+    {/* Export modal */}
+    {(showExportModal || exportMsg==="copy_failed") && (
+      <div style={{ position:"fixed",inset:0,zIndex:2000,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",padding:16 }}
+        onClick={()=>{setShowExportModal(false);setExportMsg("");}}>
+        <div onClick={e=>e.stopPropagation()} style={{ background:"#fff",borderRadius:14,padding:20,width:"100%",maxWidth:480,boxShadow:"0 8px 32px rgba(0,0,0,0.2)" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10 }}>
+            <span style={{ fontSize:13,fontWeight:"bold",color:"#333",fontFamily:FONT }}>データをコピーして保存</span>
+            <button onClick={()=>{setShowExportModal(false);setExportMsg("");}} style={{ background:"none",border:"none",fontSize:16,color:"#c04040",cursor:"pointer" }}>✕</button>
+          </div>
+          <p style={{ fontSize:11,color:"#888",marginBottom:8,fontFamily:FONT }}>下のテキストを全選択してコピーし、メモアプリやファイルに貼り付けて保存してください。</p>
+          <textarea readOnly value={exportJson}
+            style={{ width:"100%",height:160,fontSize:10,fontFamily:"monospace",border:"1px solid #ddd",borderRadius:8,padding:8,resize:"none",background:"#f8f8f6",color:"#333",boxSizing:"border-box" }}
+            onFocus={e=>e.target.select()}/>
+          <button onClick={async()=>{
+            try{ await navigator.clipboard.writeText(exportJson); setExportMsg("✓ コピー済み"); setTimeout(()=>setExportMsg(""),3000); }
+            catch{}
+          }} style={{ marginTop:10,width:"100%",padding:"9px 0",borderRadius:8,background:"#2a7a40",color:"#fff",border:"none",fontSize:13,cursor:"pointer",fontFamily:FONT,fontWeight:"bold" }}>
+            {exportMsg==="✓ コピー済み" ? "✓ コピー済み" : "クリップボードにコピー"}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* Header */}
+    <div style={{ padding:"16px 20px 12px",borderBottom:"1px solid #e0e0dc",background:"#fff",boxShadow:"0 1px 4px rgba(0,0,0,0.06)" }}>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+        <div>
+          <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:1 }}>
+            {SUITS.map((s,i)=><span key={i} style={{ fontSize:16,color:SUIT_COLOR(s) }}>{s}</span>)}
+            <h1 style={{ margin:"0 0 0 4px",fontSize:16,fontWeight:"bold",letterSpacing:"0.18em",textTransform:"uppercase",color:"#b08820",fontFamily:FONT }}>Player's Book</h1>
+          </div>
+          <p style={{ margin:0,fontSize:8,color:"#ccc",letterSpacing:"0.2em",textTransform:"uppercase",fontFamily:FONT }}>Poker Read & Hand Notebook</p>
+        </div>
+        <div style={{ display:"flex",gap:6,alignItems:"center" }}>
+          <button onClick={()=>{ exportData(); setShowExportModal(true); }}
+            style={{ display:"flex",alignItems:"center",gap:4,padding:"6px 11px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:FONT,
+              background: exportMsg==="✓ コピー済み" ? "#2a7a40" : "#f0f5e8",
+              color: exportMsg==="✓ コピー済み" ? "#fff" : "#2a7a40",
+              border:"1px solid #a8d0a8",fontWeight:"bold" }}>
+            {exportMsg==="✓ コピー済み" ? exportMsg : "↓ 書き出し"}
+          </button>
+          <label style={{ display:"flex",alignItems:"center",gap:4,padding:"6px 11px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:FONT,background:"#e8f0ff",color:"#3060a0",border:"1px solid #a0b8e0",fontWeight:"bold" }}>
+            ↑ 読み込み
+            <input type="file" accept=".json" onChange={importData} style={{ display:"none" }}/>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    {/* LIST */}
+    {view==="list"&&(
+      <div style={{ padding:"16px" }}>
+        <div style={{ display:"flex",gap:8,marginBottom:14 }}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="名前・傾向で検索..." style={{ ...inp,flex:1 }}/>
+          <button onClick={openNew} style={{ background:"#2a7a40",border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:13,cursor:"pointer",fontFamily:FONT,whiteSpace:"nowrap",fontWeight:"bold" }}>＋ 追加</button>
+        </div>
+        {filtered.length===0&&<div style={{ textAlign:"center",padding:"50px 0",color:"#ccc",fontSize:13,fontFamily:FONT }}><div style={{ fontSize:36,marginBottom:12 }}>♦</div>プレイヤーなし</div>}
+        {filtered.map(p=>{
+          const summary=actionSummary(p);
+          const topActions=Object.entries(summary).sort((a,b)=>b[1]-a[1]).slice(0,3);
+          return(
+            <div key={p.id} onClick={()=>openDetail(p)} style={{ background:"#fff",border:"1px solid #e0e0dc",borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",display:"flex",gap:12,alignItems:"center",boxShadow:"0 1px 3px rgba(0,0,0,0.05)",transition:"box-shadow .15s" }} onMouseEnter={e=>e.currentTarget.style.boxShadow="0 3px 10px rgba(0,0,0,0.1)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.05)"}>
+              <div style={{ width:40,height:40,borderRadius:"50%",flexShrink:0,background:"#f5f0e8",border:"2px solid #ddd",display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,color:SUIT_COLOR(p.suit) }}>{p.suit}</div>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline" }}>
+                  <span style={{ fontSize:14,color:"#1a1a1a",fontWeight:"bold",fontFamily:FONT }}>{p.name||"名無し"}</span>
+                  <span style={{ fontSize:10,color:"#aaa",fontFamily:FONT }}>{[p.tableSize,p.seat,p.skill].filter(Boolean).join(" · ")}</span>
+                </div>
+                <div style={{ display:"flex",gap:4,marginTop:5,flexWrap:"wrap" }}>
+                  {p.tendencies.slice(0,2).map(t=><span key={t} style={{ fontSize:10,padding:"1px 7px",borderRadius:20,background:"#f5ead0",color:"#b08820",border:"1px solid #d4c090",fontFamily:FONT }}>{t}</span>)}
+                  {topActions.map(([a,c])=><span key={a} style={{ fontSize:10,padding:"1px 7px",borderRadius:20,background:ACTION_COLOR[a]+"18",color:ACTION_COLOR[a],border:`1px solid ${ACTION_COLOR[a]}44`,fontFamily:FONT }}>{a}×{c}</span>)}
+                  {(p.hands||[]).length>0&&<span style={{ fontSize:10,color:"#3060a0",fontFamily:FONT }}>{(p.hands||[]).length}ハンド</span>}
+                </div>
+              </div>
+              <span style={{ color:"#ccc",fontSize:16 }}>›</span>
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {/* DETAIL */}
+    {view==="detail"&&selected&&(()=>{
+      const summary=actionSummary(selected);
+      return(
+        <div style={{ padding:"16px" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:14 }}>
+            <button onClick={()=>setView("list")} style={ghostBtn}>← 一覧</button>
+            <button onClick={openEdit} style={{ ...ghostBtn,color:"#b08820",border:"1px solid #d4c090",background:"#f5ead0" }}>✎ 編集</button>
+          </div>
+          <div style={{ background:"#fff",border:"1px solid #e0e0dc",borderRadius:16,padding:"18px",marginBottom:12,textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.06)" }}>
+            <div style={{ width:60,height:60,borderRadius:"50%",margin:"0 auto 10px",background:"#f5f0e8",border:"2px solid #ddd",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,color:SUIT_COLOR(selected.suit) }}>{selected.suit}</div>
+            <h2 style={{ margin:"0 0 3px",fontSize:19,fontWeight:"bold",color:"#1a1a1a",fontFamily:FONT }}>{selected.name}</h2>
+            <div style={{ fontSize:11,color:"#888",marginBottom:10,fontFamily:FONT }}>
+              {[selected.tableSize,selected.seat,selected.skill,selected.vpip&&`VPIP ${selected.vpip}%`,selected.pfr&&`PFR ${selected.pfr}%`].filter(Boolean).join(" · ")}
+            </div>
+            <div style={{ display:"flex",flexWrap:"wrap",gap:5,justifyContent:"center",marginBottom:8 }}>
+              {selected.tendencies.map(t=><span key={t} style={{ fontSize:11,padding:"3px 10px",borderRadius:20,background:"#f5ead0",color:"#b08820",border:"1px solid #d4c090",fontFamily:FONT }}>{t}</span>)}
+            </div>
+            {Object.keys(summary).length>0&&(
+              <div style={{ display:"flex",flexWrap:"wrap",gap:4,justifyContent:"center" }}>
+                {Object.entries(summary).sort((a,b)=>b[1]-a[1]).map(([a,c])=><span key={a} style={{ fontSize:11,padding:"2px 8px",borderRadius:6,background:ACTION_COLOR[a]+"18",color:ACTION_COLOR[a],border:`1px solid ${ACTION_COLOR[a]}44`,fontFamily:FONT }}>{a} <strong>{c}</strong></span>)}
+              </div>
+            )}
+          </div>
+          {selected.notes&&(
+            <div style={{ background:"#fff",border:"1px solid #e0e0dc",borderRadius:12,padding:"12px 14px",marginBottom:12 }}>
+              <div style={{ fontSize:10,color:"#888",letterSpacing:"0.12em",marginBottom:6,textTransform:"uppercase",fontFamily:FONT }}>メモ</div>
+              <p style={{ margin:0,fontSize:13,lineHeight:1.7,color:"#333",whiteSpace:"pre-wrap",fontFamily:FONT }}>{selected.notes}</p>
+            </div>
+          )}
+          {(selected.hands||[]).length>0&&(
+            <div>
+              <div style={{ fontSize:10,color:"#888",letterSpacing:"0.12em",marginBottom:10,textTransform:"uppercase",fontFamily:FONT }}>ハンド履歴 ({(selected.hands||[]).length})</div>
+              {(selected.hands||[]).map(h=>{
+                const villains=h.villains||[{id:"v0",pos:h.villainPos||"",range:h.villainRange||[]}];
+                return(
+                  <div key={h.id} style={{ background:"#fff",border:"1px solid #e0e0dc",borderRadius:10,padding:"10px 12px",marginBottom:8,boxShadow:"0 1px 3px rgba(0,0,0,0.04)" }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:8,flexWrap:"wrap" }}>
+                      <span style={{ fontSize:11,color:"#aaa",fontFamily:"monospace" }}>{h.date}</span>
+                      {villains.map((v,vi)=>(
+                        <span key={v.id} style={{ display:"inline-flex",gap:3 }}>
+                          {v.pos&&<span style={{ fontSize:10,padding:"1px 5px",borderRadius:4,background:VILLAIN_BGS[vi%VILLAIN_BGS.length],color:VILLAIN_COLORS[vi%VILLAIN_COLORS.length],fontFamily:FONT,border:`1px solid ${VILLAIN_BORDERS[vi%VILLAIN_BORDERS.length]}` }}>{villains.length>1?`相${vi+1}`:"相"}{v.pos}</span>}
+                          {(v.range||[]).length>0&&<span style={{ fontSize:10,padding:"1px 5px",borderRadius:4,background:VILLAIN_BGS[vi%VILLAIN_BGS.length],color:VILLAIN_COLORS[vi%VILLAIN_COLORS.length],fontFamily:FONT,border:`1px solid ${VILLAIN_BORDERS[vi%VILLAIN_BORDERS.length]}` }}>{totalCombos(v.range)}c</span>}
+                        </span>
+                      ))}
+                      {h.heroPos&&<span style={{ fontSize:10,padding:"1px 5px",borderRadius:4,background:HERO_BG,color:HERO_COLOR,fontFamily:FONT,border:`1px solid ${HERO_BORDER}` }}>自{h.heroPos}</span>}
+                      {h.heroHand&&(()=>{ const [c1,c2]=heroHandToCards(h.heroHand); return <span style={{ display:"inline-flex",gap:2 }}>{[c1,c2].map((card,i)=>{ const r=card.slice(0,-1),s=card.slice(-1),isR=s==="h"||s==="d"; return <span key={i} style={{ fontSize:9,padding:"1px 4px",borderRadius:3,background:"#fff",color:isR?"#e05a5a":"#1a1a1a",fontFamily:"monospace",fontWeight:"bold",border:"1px solid #ccc",lineHeight:1.4 }}>{r}{CARD_SUIT_SYMBOL[s]}</span>; })}</span>; })()}
+                      {usedBoardCards(h.board||{}).length>0&&(
+                        <div style={{ display:"flex",gap:2 }}>
+                          {[...(h.board?.flop||[]),h.board?.turn,h.board?.river].filter(Boolean).map((card,i)=>{ const r=card.slice(0,-1),s=card.slice(-1),isR=s==="h"||s==="d"; return <span key={i} style={{ fontSize:10,padding:"2px 4px",borderRadius:3,background:"#fff",color:isR?"#e05a5a":"#1a1a1a",fontFamily:"monospace",fontWeight:"bold",border:"1px solid #ccc" }}>{r}{CARD_SUIT_SYMBOL[s]}</span>; })}
+                        </div>
+                      )}
+                    </div>
+                    {STREETS.map(s=>{
+                      const acts=(h.streets[s]||[]).filter(a=>a.action);
+                      if(!acts.length)return null;
+                      return(
+                        <div key={s} style={{ marginBottom:5,display:"flex",alignItems:"center",flexWrap:"wrap",gap:4 }}>
+                          <span style={{ fontSize:9,padding:"1px 7px",borderRadius:20,background:STREET_COLOR[s]+"18",color:STREET_COLOR[s],border:`1px solid ${STREET_COLOR[s]}44`,fontFamily:FONT }}>{s}</span>
+                          {acts.map((a)=>{
+                            const vIdx=a.actor==="hero"?-1:villains.findIndex(v=>v.id===a.actor);
+                            const col=a.actor==="hero"?HERO_COLOR:VILLAIN_COLORS[(vIdx>=0?vIdx:0)%VILLAIN_COLORS.length];
+                            const bg=a.actor==="hero"?HERO_BG:VILLAIN_BGS[(vIdx>=0?vIdx:0)%VILLAIN_BGS.length];
+                            const lbl=a.actor==="hero"?"自":(villains.length>1?`相${(vIdx>=0?vIdx:0)+1}`:"相");
+                            return <span key={a.id} style={{ display:"inline-flex",alignItems:"center",gap:2,fontSize:10,padding:"2px 7px",borderRadius:6,background:bg,color:col,border:`1px solid ${col}33`,fontFamily:FONT }}><span style={{ opacity:0.6,fontSize:9 }}>{lbl}</span>{a.action}{a.size?` ${a.size}`:""}</span>;
+                          })}
+                        </div>
+                      );
+                    })}
+                    {h.note&&<p style={{ margin:"6px 0 0",fontSize:12,color:"#888",fontStyle:"italic",fontFamily:FONT }}>{h.note}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <button onClick={()=>handleDelete(selected.id)} style={{ marginTop:10,width:"100%",background:"#fff5f5",border:"1px solid #f0a0a0",borderRadius:10,padding:"10px",color:"#c04040",fontSize:13,cursor:"pointer",fontFamily:FONT }}>削除</button>
+        </div>
+      );
+    })()}
+
+    {/* EDIT */}
+    {view==="edit"&&editData&&<PlayerForm initial={editData} onSave={handleSave} onCancel={()=>setView(selectedId?"detail":"list")}/>}
+  </div>
+</div>
+```
+
+);
+}
+ReactDOM.createRoot(document.getElementById(“root”)).render(React.createElement(App));
+</script>
+
+</body>
+</html>
