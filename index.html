@@ -5,195 +5,222 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
   <title>Players Book</title>
-  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
-  <style>* { box-sizing: border-box; margin: 0; padding: 0; } body { background: #f5f5f2; }</style>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f5f5f2; font-family: sans-serif; }
+    #loading { position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#888;background:#f5f5f2;z-index:9999; }
+  </style>
 </head>
 <body>
+  <div id="loading">
+    <div style="font-size:40px">♠♥♦♣</div>
+    <div style="font-size:14px">読み込み中... (初回は30秒ほどかかります)</div>
+  </div>
   <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useRef, useEffect } = React;
+
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <script>
+    // Load Babel then execute
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js';
+    s.onload = function() {
+      const appScript = document.getElementById('app-code');
+      const src = appScript.textContent;
+      try {
+        const transformed = Babel.transform(src, {presets: ['react']}).code;
+        const fn = new Function('React','ReactDOM','useState','useRef','useEffect', transformed + '\nreturn App;');
+        const App = fn(React, ReactDOM, React.useState, React.useRef, React.useEffect);
+        document.getElementById('loading').style.display = 'none';
+        ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+      } catch(e) {
+        document.getElementById('loading').innerHTML = '<div style="color:#c04040;padding:20px;font-size:12px;white-space:pre-wrap">Error: ' + e.message + '</div>';
+      }
+    };
+    s.onerror = function() {
+      document.getElementById('loading').innerHTML = '<div style="color:#c04040;padding:20px">CDN読み込み失敗。ネット接続を確認してください。</div>';
+    };
+    document.head.appendChild(s);
+  </script>
+
+  <script id="app-code" type="text/plain">
+
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const SUITS = [“♠”,“♥”,“♦”,“♣”];
-const SUIT_COLOR = s => (s===“♥”||s===“♦”) ? “#e05a5a” : “#1a1a1a”;
-const STREETS = [“Preflop”,“Flop”,“Turn”,“River”];
-const STREET_COLOR = { Preflop:”#4070e0”, Flop:”#22a060”, Turn:”#d08010”, River:”#d03030” };
-const ACTIONS = [“Fold”,“Check”,“Call”,“Bet”,“Raise”,“3Bet”,“4Bet+”,“Limp”,“AllIn”];
+const SUITS = ["♠","♥","♦","♣"];
+const SUIT_COLOR = s => (s==="♥"||s==="♦") ? "#e05a5a" : "#1a1a1a";
+const STREETS = ["Preflop","Flop","Turn","River"];
+const STREET_COLOR = { Preflop:"#4070e0", Flop:"#22a060", Turn:"#d08010", River:"#d03030" };
+const ACTIONS = ["Fold","Check","Call","Bet","Raise","3Bet","4Bet+","Limp","AllIn"];
 const ACTION_COLOR = {
-Fold:”#888”, Check:”#20a080”, Call:”#3070c0”, Bet:”#b08820”,
-Raise:”#c06010”, “3Bet”:”#b02040”, “4Bet+”:”#8010a0”, Limp:”#408840”, AllIn:”#d02020”,
+  Fold:"#888", Check:"#20a080", Call:"#3070c0", Bet:"#b08820",
+  Raise:"#c06010", "3Bet":"#b02040", "4Bet+":"#8010a0", Limp:"#408840", AllIn:"#d02020",
 };
-const SIZES = [“min”,“2x”,“2.5x”,“3x”,“4x”,“5x+”,“¼pot”,“⅓pot”,“½pot”,“⅔pot”,“¾pot”,“pot”];
-const TENDENCIES = [“アグレッシブ”,“パッシブ”,“タイト”,“ルーズ”,“ブラフ多め”,“コールステーション”,“ナット狙い”,“読みにくい”,“ポジ意識高い”,“OOP苦手”];
-const SKILL_LEVELS = [“初心者”,“中級者”,“上級者”,“プロ級”];
-const TABLE_SIZES = [“HU”,“3max”,“4max”,“5max”,“6max”,“7max”,“8max”,“9max”,“10max”];
-const RANKS = [“A”,“K”,“Q”,“J”,“T”,“9”,“8”,“7”,“6”,“5”,“4”,“3”,“2”];
-const CARD_SUITS = [“s”,“h”,“d”,“c”];
-const CARD_SUIT_SYMBOL = { s:“♠”, h:“♥”, d:“♦”, c:“♣” };
-const CARD_SUIT_COLOR  = { s:”#1a1a1a”, h:”#e05a5a”, d:”#e05a5a”, c:”#1a1a1a” };
-const CARD_RANKS = [“A”,“K”,“Q”,“J”,“T”,“9”,“8”,“7”,“6”,“5”,“4”,“3”,“2”];
+const SIZES = ["min","2x","2.5x","3x","4x","5x+","¼pot","⅓pot","½pot","⅔pot","¾pot","pot"];
+const TENDENCIES = ["アグレッシブ","パッシブ","タイト","ルーズ","ブラフ多め","コールステーション","ナット狙い","読みにくい","ポジ意識高い","OOP苦手"];
+const SKILL_LEVELS = ["初心者","中級者","上級者","プロ級"];
+const TABLE_SIZES = ["HU","3max","4max","5max","6max","7max","8max","9max","10max"];
+const RANKS = ["A","K","Q","J","T","9","8","7","6","5","4","3","2"];
+const CARD_SUITS = ["s","h","d","c"];
+const CARD_SUIT_SYMBOL = { s:"♠", h:"♥", d:"♦", c:"♣" };
+const CARD_SUIT_COLOR  = { s:"#1a1a1a", h:"#e05a5a", d:"#e05a5a", c:"#1a1a1a" };
+const CARD_RANKS = ["A","K","Q","J","T","9","8","7","6","5","4","3","2"];
 
-const VILLAIN_COLORS = [”#c03060”,”#c06010”,”#7020c0”,”#10a080”];
-const VILLAIN_BGS    = [“rgba(192,48,96,0.1)”,“rgba(192,96,16,0.1)”,“rgba(112,32,192,0.1)”,“rgba(16,160,128,0.1)”];
-const VILLAIN_BORDERS= [“rgba(192,48,96,0.3)”,“rgba(192,96,16,0.3)”,“rgba(112,32,192,0.3)”,“rgba(16,160,128,0.3)”];
-const HERO_COLOR = “#2060b0”;
-const HERO_BG    = “rgba(32,96,176,0.08)”;
-const HERO_BORDER= “rgba(32,96,176,0.25)”;
+const VILLAIN_COLORS = ["#c03060","#c06010","#7020c0","#10a080"];
+const VILLAIN_BGS    = ["rgba(192,48,96,0.1)","rgba(192,96,16,0.1)","rgba(112,32,192,0.1)","rgba(16,160,128,0.1)"];
+const VILLAIN_BORDERS= ["rgba(192,48,96,0.3)","rgba(192,96,16,0.3)","rgba(112,32,192,0.3)","rgba(16,160,128,0.3)"];
+const HERO_COLOR = "#2060b0";
+const HERO_BG    = "rgba(32,96,176,0.08)";
+const HERO_BORDER= "rgba(32,96,176,0.25)";
 
 const SEAT_ANGLES = {
-“HU”:    {“BTN/SB”:270,“BB”:90},
-“3max”:  {“BTN”:270,“SB”:30,“BB”:150},
-“4max”:  {“CO”:270,“BTN”:0,“SB”:90,“BB”:180},
-“5max”:  {“UTG”:252,“CO”:324,“BTN”:36,“SB”:108,“BB”:180},
-“6max”:  {“UTG”:240,“HJ”:300,“CO”:0,“BTN”:60,“SB”:120,“BB”:180},
-“7max”:  {“UTG”:231,“MP”:282,“HJ”:333,“CO”:26,“BTN”:77,“SB”:128,“BB”:180},
-“8max”:  {“UTG”:225,“UTG+1”:270,“MP”:315,“HJ”:0,“CO”:45,“BTN”:90,“SB”:135,“BB”:180},
-“9max”:  {“UTG”:220,“UTG+1”:260,“MP”:300,“HJ”:340,“CO”:20,“BTN”:60,“SB”:100,“BB”:140,“BB2”:180},
-“10max”: {“UTG”:216,“UTG+1”:252,“UTG+2”:288,“MP”:324,“HJ”:0,“CO”:36,“BTN”:72,“SB”:108,“BB”:144,“BB2”:180},
+  "HU":    {"BTN/SB":270,"BB":90},
+  "3max":  {"BTN":270,"SB":30,"BB":150},
+  "4max":  {"CO":270,"BTN":0,"SB":90,"BB":180},
+  "5max":  {"UTG":252,"CO":324,"BTN":36,"SB":108,"BB":180},
+  "6max":  {"UTG":240,"HJ":300,"CO":0,"BTN":60,"SB":120,"BB":180},
+  "7max":  {"UTG":231,"MP":282,"HJ":333,"CO":26,"BTN":77,"SB":128,"BB":180},
+  "8max":  {"UTG":225,"UTG+1":270,"MP":315,"HJ":0,"CO":45,"BTN":90,"SB":135,"BB":180},
+  "9max":  {"UTG":220,"UTG+1":260,"MP":300,"HJ":340,"CO":20,"BTN":60,"SB":100,"BB":140,"BB2":180},
+  "10max": {"UTG":216,"UTG+1":252,"UTG+2":288,"MP":324,"HJ":0,"CO":36,"BTN":72,"SB":108,"BB":144,"BB2":180},
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const uid  = () => Math.random().toString(36).slice(2,9);
-const now  = () => new Date().toLocaleDateString(“ja-JP”,{month:“numeric”,day:“numeric”,hour:“2-digit”,minute:“2-digit”});
-const cellLabel = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return r+r; if(i<j)return r+c+“s”; return c+r+“o”; };
-const cellType  = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return”pair”; if(i<j)return”suited”; return”offsuit”; };
-const usedBoardCards = b => { if(!b)return[]; return […(b.flop||[]),…[b.turn,b.river]].filter(Boolean); };
-const comboCount = key => key.length===2 ? 6 : key.endsWith(“s”) ? 4 : 12;
+const now  = () => new Date().toLocaleDateString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
+const cellLabel = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return r+r; if(i<j)return r+c+"s"; return c+r+"o"; };
+const cellType  = (r,c) => { const i=RANKS.indexOf(r),j=RANKS.indexOf(c); if(i===j)return"pair"; if(i<j)return"suited"; return"offsuit"; };
+const usedBoardCards = b => { if(!b)return[]; return [...(b.flop||[]),...[b.turn,b.river]].filter(Boolean); };
+const comboCount = key => key.length===2 ? 6 : key.endsWith("s") ? 4 : 12;
 const totalCombos = range => (range||[]).reduce((s,k)=>s+comboCount(k),0);
 
 // Calculate pot size in BB at the start of each street
 const calcPots = (hand) => {
-const ante = hand.ante || false;
-let pot = ante ? 2.5 : 1.5;
+  const ante = hand.ante || false;
+  let pot = ante ? 2.5 : 1.5;
 
-// Preflop blind already-posted amounts per position
-const BLIND_POSTED = { “BB”:1, “SB”:0.5, “BTN/SB”:0.5 };
-const getBlind = pos => BLIND_POSTED[(pos||””).toUpperCase()] || 0;
-const getActorPos = actor => {
-if (actor===“hero”) return hand.heroPos||””;
-const v=(hand.villains||[]).find(v=>v.id===actor);
-return v?v.pos||””:””;
-};
+  // Preflop blind already-posted amounts per position
+  const BLIND_POSTED = { "BB":1, "SB":0.5, "BTN/SB":0.5 };
+  const getBlind = pos => BLIND_POSTED[(pos||"").toUpperCase()] || 0;
+  const getActorPos = actor => {
+    if (actor==="hero") return hand.heroPos||"";
+    const v=(hand.villains||[]).find(v=>v.id===actor);
+    return v?v.pos||"":"";
+  };
 
-// size-label → total bet amount in BB
-// For open bets: “2x” = 2×BB = 2BB
-// For raises: “2x” = 2×currentBet, “3x” = 3×currentBet, etc.
-// pot-relative: fraction of current pot
-const sizeLabel2BB = (size, currentPot, currentBet, isRaise) => {
-if(!size) return 0;
-const base = isRaise ? currentBet : 1; // raises are multiples of current bet, bets are multiples of 1BB
-if(size===“min”)    return currentBet * 2;   // min-raise = 2× current bet
-if(size===“2x”)     return base * 2;
-if(size===“2.5x”)   return base * 2.5;
-if(size===“3x”)     return base * 3;
-if(size===“4x”)     return base * 4;
-if(size===“5x+”)    return base * 5;
-if(size===“¼pot”)   return currentPot * 0.25;
-if(size===“⅓pot”)   return currentPot * (1/3);
-if(size===“½pot”)   return currentPot * 0.5;
-if(size===“⅔pot”)   return currentPot * (2/3);
-if(size===“¾pot”)   return currentPot * 0.75;
-if(size===“pot”)    return currentPot;
-return 0;
-};
+  // size-label → total bet amount in BB
+  // For open bets: "2x" = 2×BB = 2BB
+  // For raises: "2x" = 2×currentBet, "3x" = 3×currentBet, etc.
+  // pot-relative: fraction of current pot
+  const sizeLabel2BB = (size, currentPot, currentBet, isRaise) => {
+    if(!size) return 0;
+    const base = isRaise ? currentBet : 1; // raises are multiples of current bet, bets are multiples of 1BB
+    if(size==="min")    return currentBet * 2;   // min-raise = 2× current bet
+    if(size==="2x")     return base * 2;
+    if(size==="2.5x")   return base * 2.5;
+    if(size==="3x")     return base * 3;
+    if(size==="4x")     return base * 4;
+    if(size==="5x+")    return base * 5;
+    if(size==="¼pot")   return currentPot * 0.25;
+    if(size==="⅓pot")   return currentPot * (1/3);
+    if(size==="½pot")   return currentPot * 0.5;
+    if(size==="⅔pot")   return currentPot * (2/3);
+    if(size==="¾pot")   return currentPot * 0.75;
+    if(size==="pot")    return currentPot;
+    return 0;
+  };
 
-const addStreetActions = (street) => {
-const committed = {};
-// Preflop: pre-credit already-posted blind amounts
-if(street===“Preflop”){
-(hand.streets[street]||[]).forEach(a=>{
-if(!(a.actor in committed))
-committed[a.actor] = getBlind(getActorPos(a.actor));
-});
-}
-let currentBet = street===“Preflop” ? 1 : 0;
-
-```
-(hand.streets[street]||[]).forEach(a=>{
-  if(!a.action) return;
-  if(!(a.actor in committed)) committed[a.actor] = 0; // ← 未登録のみ初期化（上書きしない）
-
-  if(["Bet","Raise","3Bet","4Bet+","AllIn"].includes(a.action)){
-    const isRaise = ["Raise","3Bet","4Bet+"].includes(a.action) && currentBet > 0;
-    const totalBet = a.betAmt && parseFloat(a.betAmt)>0
-      ? parseFloat(a.betAmt)
-      : sizeLabel2BB(a.size, pot, currentBet, isRaise);
-    if(totalBet>0){
-      const netAdd = totalBet - committed[a.actor];
-      pot += Math.max(0, netAdd);
-      committed[a.actor] = totalBet;
-      currentBet = totalBet;
+  const addStreetActions = (street) => {
+    const committed = {};
+    // Preflop: pre-credit already-posted blind amounts
+    if(street==="Preflop"){
+      (hand.streets[street]||[]).forEach(a=>{
+        if(!(a.actor in committed))
+          committed[a.actor] = getBlind(getActorPos(a.actor));
+      });
     }
-  } else if(a.action==="Call"){
-    const netAdd = currentBet - committed[a.actor];
-    pot += Math.max(0, netAdd);
-    committed[a.actor] = currentBet;
-  } else if(a.action==="Limp"){
-    const netAdd = 1 - committed[a.actor];
-    pot += Math.max(0, netAdd);
-    committed[a.actor] = 1;
-    if(currentBet<1) currentBet=1;
-  }
-});
-```
+    let currentBet = street==="Preflop" ? 1 : 0;
 
-};
+    (hand.streets[street]||[]).forEach(a=>{
+      if(!a.action) return;
+      if(!(a.actor in committed)) committed[a.actor] = 0; // ← 未登録のみ初期化（上書きしない）
 
-const r1 = v => Math.round(v*10)/10;
-const pots = { Preflop: r1(pot) };
-addStreetActions(“Preflop”);
-pots.Flop = r1(pot);
-addStreetActions(“Flop”);
-pots.Turn = r1(pot);
-addStreetActions(“Turn”);
-pots.River = r1(pot);
-return pots;
+      if(["Bet","Raise","3Bet","4Bet+","AllIn"].includes(a.action)){
+        const isRaise = ["Raise","3Bet","4Bet+"].includes(a.action) && currentBet > 0;
+        const totalBet = a.betAmt && parseFloat(a.betAmt)>0
+          ? parseFloat(a.betAmt)
+          : sizeLabel2BB(a.size, pot, currentBet, isRaise);
+        if(totalBet>0){
+          const netAdd = totalBet - committed[a.actor];
+          pot += Math.max(0, netAdd);
+          committed[a.actor] = totalBet;
+          currentBet = totalBet;
+        }
+      } else if(a.action==="Call"){
+        const netAdd = currentBet - committed[a.actor];
+        pot += Math.max(0, netAdd);
+        committed[a.actor] = currentBet;
+      } else if(a.action==="Limp"){
+        const netAdd = 1 - committed[a.actor];
+        pot += Math.max(0, netAdd);
+        committed[a.actor] = 1;
+        if(currentBet<1) currentBet=1;
+      }
+    });
+  };
+
+  const r1 = v => Math.round(v*10)/10;
+  const pots = { Preflop: r1(pot) };
+  addStreetActions("Preflop");
+  pots.Flop = r1(pot);
+  addStreetActions("Flop");
+  pots.Turn = r1(pot);
+  addStreetActions("Turn");
+  pots.River = r1(pot);
+  return pots;
 };
 const heroHandToCards = key => {
-if (!key) return [null, null];
-if (key.length === 2) return [key[0]+“s”, key[1]+“h”];
-const r1=key[0], r2=key[1], type=key[2];
-return type===“s” ? [r1+“s”, r2+“s”] : [r1+“s”, r2+“h”];
+  if (!key) return [null, null];
+  if (key.length === 2) return [key[0]+"s", key[1]+"h"];
+  const r1=key[0], r2=key[1], type=key[2];
+  return type==="s" ? [r1+"s", r2+"s"] : [r1+"s", r2+"h"];
 };
 
-const newVillain = () => ({ id:uid(), pos:””, range:[], bb:”” });
-const newAction  = (actor=“v0”) => ({ id:uid(), actor, action:null, size:null, betAmt:””, comment:”” });
+const newVillain = () => ({ id:uid(), pos:"", range:[], bb:"" });
+const newAction  = (actor="v0") => ({ id:uid(), actor, action:null, size:null, betAmt:"", comment:"" });
 const newHand    = () => ({
-id:uid(), date:now(),
-streets:{ Preflop:[], Flop:[], Turn:[], River:[] },
-note:””, heroHand:null, heroPos:””, heroBB:””,
-ante: true,
-villains:[ newVillain() ],
-board:{ flop:[null,null,null], turn:null, river:null },
-avgBB:””, playersLeft:””, playersTot:””,
+  id:uid(), date:now(),
+  streets:{ Preflop:[], Flop:[], Turn:[], River:[] },
+  note:"", heroHand:null, heroPos:"", heroBB:"",
+  ante: true,
+  villains:[ newVillain() ],
+  board:{ flop:[null,null,null], turn:null, river:null },
+  avgBB:"", playersLeft:"", playersTot:"",
 });
 const newPlayer = () => ({
-id:uid(), name:””, seat:””, suit:SUITS[0], skill:“中級者”,
-tendencies:[], vpip:””, pfr:””, notes:””, hands:[], tableSize:“6max”,
+  id:uid(), name:"", seat:"", suit:SUITS[0], skill:"中級者",
+  tendencies:[], vpip:"", pfr:"", notes:"", hands:[], tableSize:"6max",
 });
 
-const load    = () => { try { const d=localStorage.getItem(“pkr6”); return d?JSON.parse(d):[]; } catch { return []; } };
-const persist = d => { try { localStorage.setItem(“pkr6”,JSON.stringify(d)); } catch {} };
+const load    = () => { try { const d=localStorage.getItem("pkr6"); return d?JSON.parse(d):[]; } catch { return []; } };
+const persist = d => { try { localStorage.setItem("pkr6",JSON.stringify(d)); } catch {} };
 
 const actorLabel = (actor, villains) => {
-if (actor===“hero”) return “自分”;
-const idx = (villains||[]).findIndex(v=>v.id===actor);
-const n = idx >= 0 ? idx : parseInt((actor||“v0”).slice(1))||0;
-return villains && villains.length > 1 ? `相手${n+1}` : “相手”;
+  if (actor==="hero") return "自分";
+  const idx = (villains||[]).findIndex(v=>v.id===actor);
+  const n = idx >= 0 ? idx : parseInt((actor||"v0").slice(1))||0;
+  return villains && villains.length > 1 ? `相手${n+1}` : "相手";
 };
-const actorColor = (actor, idx) => actor===“hero” ? HERO_COLOR : VILLAIN_COLORS[idx%VILLAIN_COLORS.length];
-const actorBg    = (actor, idx) => actor===“hero” ? HERO_BG    : VILLAIN_BGS[idx%VILLAIN_BGS.length];
+const actorColor = (actor, idx) => actor==="hero" ? HERO_COLOR : VILLAIN_COLORS[idx%VILLAIN_COLORS.length];
+const actorBg    = (actor, idx) => actor==="hero" ? HERO_BG    : VILLAIN_BGS[idx%VILLAIN_BGS.length];
 
-const FONT = “‘Meiryo’,‘メイリオ’,‘Hiragino Kaku Gothic ProN’,‘Hiragino Sans’,sans-serif”;
+const FONT = "'Meiryo','メイリオ','Hiragino Kaku Gothic ProN','Hiragino Sans',sans-serif";
 
 // ── Styles ─────────────────────────────────────────────────────────────────
-const inp = { width:“100%”,background:”#fff”,border:“1px solid #ccc”,borderRadius:8,padding:“9px 12px”,color:”#1a1a1a”,fontSize:13,outline:“none”,fontFamily:FONT,boxSizing:“border-box” };
-const ghostBtn = { background:”#f0f0ee”,border:“1px solid #ccc”,borderRadius:8,padding:“7px 14px”,color:”#444”,fontSize:12,cursor:“pointer”,fontFamily:FONT };
-</script>
-
-  <script type="text/babel">
+const inp = { width:"100%",background:"#fff",border:"1px solid #ccc",borderRadius:8,padding:"9px 12px",color:"#1a1a1a",fontSize:13,outline:"none",fontFamily:FONT,boxSizing:"border-box" };
+const ghostBtn = { background:"#f0f0ee",border:"1px solid #ccc",borderRadius:8,padding:"7px 14px",color:"#444",fontSize:12,cursor:"pointer",fontFamily:FONT };
 function FLabel({ label, children, style }) {
   return (
     <div style={{ marginBottom:14,...style }}>
@@ -414,9 +441,6 @@ function PokerTable({ tableSize, selected, onChange, heroPos, heroBB, onChangeHe
 }
 
 // ── Card Face ──────────────────────────────────────────────────────────────
-  </script>
-
-  <script type="text/babel">
 function CardFace({ card, size="md", dim=false, onClick, placeholder=false }) {
   const sz=size==="sm"?{w:26,h:36,fs:10,ss:8}:size==="lg"?{w:42,h:58,fs:16,ss:11}:{w:34,h:46,fs:13,ss:10};
   if(!card&&!placeholder)return null;
@@ -662,9 +686,6 @@ function HandEditor({ hand, onChange, onDelete, tableSize }) {
                   style={{ ...inp,textAlign:"center" }}
                 />
                 <span style={{ fontSize:11,color:"#aaa",flexShrink:0,fontFamily:FONT }}>人</span>
-  </script>
-
-  <script type="text/babel">
               </div>
             </div>
           </div>
@@ -925,9 +946,6 @@ function HandEditor({ hand, onChange, onDelete, tableSize }) {
                         <td style={{ paddingRight:4,textAlign:"right",paddingTop:4 }}>
                           <span style={{ fontSize:9,color:"#aaa",fontFamily:FONT }}>計</span>
                         </td>
-  </script>
-
-  <script type="text/babel">
                         {streetsWithActs.map(({street})=>(
                           <td key={street} style={{ padding:"4px 2px 1px",textAlign:"center",borderTop:"1px solid #eee" }}>
                             <span style={{ fontSize:10,fontFamily:FONT,color:"#666",background:"#f5f5f2",border:"1px solid #e0e0dc",borderRadius:6,padding:"2px 7px",whiteSpace:"nowrap" }}>
@@ -1232,8 +1250,6 @@ function App() {
     </div>
   );
 }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
   </script>
 
 </body>
