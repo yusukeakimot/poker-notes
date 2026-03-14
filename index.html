@@ -5,17 +5,32 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
   <title>Players Book</title>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #f5f5f2; }
+    body { background: #f5f5f2; font-family: sans-serif; }
+    #loading { display:flex; align-items:center; justify-content:center; height:100vh; flex-direction:column; gap:16px; color:#888; }
+    #error { display:none; padding:20px; color:#c04040; background:#fff; margin:20px; border-radius:8px; font-size:12px; white-space:pre-wrap; }
   </style>
 </head>
 <body>
+  <div id="loading">
+    <div style="font-size:32px">♠♥♦♣</div>
+    <div>読み込み中...</div>
+  </div>
+  <div id="error"></div>
   <div id="root"></div>
-  <script type="text/babel" data-presets="react">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      document.getElementById('loading').style.display='none';
+      var e = document.getElementById('error');
+      e.style.display='block';
+      e.textContent = 'Error: ' + msg + '\nLine: ' + line + '\n' + (err ? err.stack : '');
+    };
+  </script>
+  <script type="text/babel" data-presets="react" data-type="module">
     const { useState, useRef, useEffect } = React;
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -1229,6 +1244,7 @@ return(
 
 );
 }
+document.getElementById(‘loading’).style.display=‘none’;
 const root = ReactDOM.createRoot(document.getElementById(“root”));
 root.render(React.createElement(App));
 </script>
